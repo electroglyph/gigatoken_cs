@@ -13,15 +13,11 @@ and a `gigatoken bench` CLI.
 - ~18x faster than the HF `tokenizers` C# binding on short sequences
   (see [Benchmarks](#benchmarks)).
 
-## Install / build
-
-Prerequisites: .NET 10 SDK, a Rust toolchain (`cargo`).
+## Cloning
 
 ```sh
-git clone --recurse-submodules https://github.com/<you>/gigatoken_cs.git
-./build.sh            # host RID: cargo build + stage runtimes/ + dotnet build
-TARGETS="x86_64-unknown-linux-gnu aarch64-apple-darwin" ./build.sh  # cross
-./build.sh --pack     # ... then dotnet pack (produces Gigatoken.0.10.0.nupkg)
+git clone --recurse-submodules https://github.com/electroglyph/gigatoken_cs.git
+cd gigatoken_cs
 ```
 
 Already cloned without submodules? `git submodule update --init`.
@@ -32,6 +28,18 @@ checked in as the `upstream/` git submodule (pinned to commit `fac0114`).
 The Rust core is compiled from those exact sources via `#[path]` includes
 in `cabi/lib.rs` — no fork, no copied files.
 
+## Building
+
+Prerequisites: .NET 10 SDK, a Rust nightly toolchain (`cargo`; see
+`rust-toolchain.toml`).
+
+```sh
+./build.sh            # host RID: cargo build --release + stage runtimes/ + dotnet build
+TARGETS="x86_64-unknown-linux-gnu aarch64-apple-darwin" ./build.sh  # cross
+./build.sh --pack     # ... then dotnet pack (produces Gigatoken.0.10.0.nupkg)
+./build.sh --no-native  # skip cargo; uses a staged lib or GIGATOKEN_NATIVE
+```
+
 If you build the Rust side yourself, point the binding at it without
 `build.sh`:
 
@@ -39,7 +47,7 @@ If you build the Rust side yourself, point the binding at it without
 GIGATOKEN_NATIVE=/path/to/libgigatoken_cabi.so dotnet run --project MyApp
 ```
 
-## Quickstart
+## Using
 
 ```csharp
 using Gigatoken;
