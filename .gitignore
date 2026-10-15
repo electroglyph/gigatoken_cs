@@ -1,0 +1,46 @@
+# .NET build outputs
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+TestResults/
+*.nupkg
+*.snupkg
+*.user
+*.suo
+.vs/
+BenchmarkDotNet.Artifacts/
+
+# Test / coverage artifacts
+*.trx
+*.coverage
+*.coveragexml
+coverage*/
+TestCoverageReport/
+
+# Rust build outputs
+target/
+**/*.rs.bk
+
+# Python tooling (tools/*.py)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# IDE / editors
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Docs: only the README is tracked (audit.md / port.md are local working notes)
+*.md
+!README.md
+
+# Local overrides / secrets
+.env
+appsettings.Development.json

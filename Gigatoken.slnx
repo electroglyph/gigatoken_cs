@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/benches/">
+    <Project Path="benches/Gigatoken.Benchmarks/Gigatoken.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Gigatoken/Gigatoken.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Gigatoken.Tests/Gigatoken.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Gigatoken.Cli/Gigatoken.Cli.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,33 @@
+# .NET port CI: Rust C ABI + library + tests on five runners.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Rust (nightly)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Build native lib + stage runtimes
+        run: ./build.sh
+
+      - name: Test (Release)
+        run: dotnet test ./Gigatoken.slnx -c Release --nologo
+
+      - name: Pack (nupkg only, symbols embedded)
+        run: dotnet pack ./src/Gigatoken/Gigatoken.csproj -c Release --no-build --nologo
