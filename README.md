@@ -18,10 +18,19 @@ and a `gigatoken bench` CLI.
 Prerequisites: .NET 10 SDK, a Rust toolchain (`cargo`).
 
 ```sh
+git clone --recurse-submodules https://github.com/<you>/gigatoken_cs.git
 ./build.sh            # host RID: cargo build + stage runtimes/ + dotnet build
 TARGETS="x86_64-unknown-linux-gnu aarch64-apple-darwin" ./build.sh  # cross
 ./build.sh --pack     # ... then dotnet pack (produces Gigatoken.0.10.0.nupkg)
 ```
+
+Already cloned without submodules? `git submodule update --init`.
+
+Upstream Python repo:
+[`marcelroed/gigatoken`](https://github.com/marcelroed/gigatoken),
+checked in as the `upstream/` git submodule (pinned to commit `fac0114`).
+The Rust core is compiled from those exact sources via `#[path]` includes
+in `cabi/lib.rs` — no fork, no copied files.
 
 If you build the Rust side yourself, point the binding at it without
 `build.sh`:
@@ -29,10 +38,6 @@ If you build the Rust side yourself, point the binding at it without
 ```sh
 GIGATOKEN_NATIVE=/path/to/libgigatoken_cabi.so dotnet run --project MyApp
 ```
-
-The full port plan, including every deliberate adaptation from upstream,
-lives in [`port.md`](port.md). Audit fixes are tracked in
-[`audit.md`](audit.md).
 
 ## Quickstart
 

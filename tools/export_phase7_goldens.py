@@ -27,7 +27,7 @@ import time
 import unicodedata
 from pathlib import Path
 
-# --- DCLM selection (mirrors /home/anon/gigatoken/tests/dclm_fixture.py) ---
+# --- DCLM selection (mirrors upstream/tests/dclm_fixture.py) ---
 DCLM_REPO = "mlfoundations/dclm-baseline-1.0"
 DCLM_REVISION = "a3b142c183aebe5af344955ae20836eb34dcf69b"
 DCLM_SHARD = "global-shard_01_of_10/local-shard_0_of_10/shard_00000000_processed.jsonl.zst"

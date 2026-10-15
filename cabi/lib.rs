@@ -4,9 +4,9 @@
 //! The upstream `gigatoken` crate cannot be used as a path dependency (its
 //! manifest uses an unstable `profile-*` key without a `cargo-features`
 //! header, and its modules are `pub(crate)`), so the Python-free core
-//! modules are vendored here via `#[path]` includes — the same files,
-//! compiled as part of *this* crate. `bindings/` (PyO3/numpy) is NOT
-//! vendored; its portable logic (wrap/pad row assembly, matcher scan,
+//! modules are included here from the `upstream/` git submodule via `#[path]`
+//! — the same files, compiled as part of *this* crate. `bindings/`
+//! (PyO3/numpy) is NOT included; its portable logic (wrap/pad row assembly, matcher scan,
 //! file scaffolding, train input handling, cache budget, hub error mapping)
 //! is reimplemented below against the C calling convention.
 //!
@@ -22,19 +22,19 @@
 
 #![feature(portable_simd)]
 
-#[path = "../../gigatoken/src/token.rs"]
+#[path = "../upstream/src/token.rs"]
 pub mod token;
-#[path = "../../gigatoken/src/batch.rs"]
+#[path = "../upstream/src/batch.rs"]
 pub mod batch;
-#[path = "../../gigatoken/src/bpe_train.rs"]
+#[path = "../upstream/src/bpe_train.rs"]
 pub mod bpe_train;
-#[path = "../../gigatoken/src/bpe/mod.rs"]
+#[path = "../upstream/src/bpe/mod.rs"]
 pub mod bpe;
-#[path = "../../gigatoken/src/input/mod.rs"]
+#[path = "../upstream/src/input/mod.rs"]
 pub mod input;
-#[path = "../../gigatoken/src/load_tokenizer/mod.rs"]
+#[path = "../upstream/src/load_tokenizer/mod.rs"]
 pub mod load_tokenizer;
-#[path = "../../gigatoken/src/pretokenize/mod.rs"]
+#[path = "../upstream/src/pretokenize/mod.rs"]
 pub mod pretokenize;
 
 pub use crate::bpe::Tokenizer;
