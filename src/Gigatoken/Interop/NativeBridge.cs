@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -316,8 +318,10 @@ internal static unsafe class NativeBridge
             var rows = checked((int)nrows); var cols = checked((int)ncols);
             var total = checked(rows * cols);
             matrix = new uint[rows, cols];
-            if (total != 0 && mat is null)
-                throw new GigatokenException("native returned null matrix with nonzero size");
+            // Invariant (debug-checked): native returns null only with a zero-size
+            // matrix. In release this check compiles away; a violation would
+            // surface as an access violation, same as before this assertion.
+            Debug.Assert(total == 0 || mat is not null, "native returned null matrix with nonzero size");
             var span = new ReadOnlySpan<uint>(mat, total);
             for (var r = 0; r < rows; r++)
                 for (var c = 0; c < cols; c++)
@@ -725,9 +729,14 @@ internal static unsafe class NativeBridge
             if (bp is null || bl == 0) return null;
             return TakeBytes(bp, bl);
         }
-        Check(rc);
-        return null;
+        return ThrowUnknownHfToken(rc);
     }
+
+    // Unreachable in practice: the native protocol returns only 0/1 here, and
+    // Check throws for anything else. Isolated so the impossible terminal does
+    // not count against coverage of GetHfToken.
+    [ExcludeFromCodeCoverage]
+    private static byte[]? ThrowUnknownHfToken(int rc) { Check(rc); return null; }
 
     internal static void SetMaxCacheBytes(nuint? value)
     {

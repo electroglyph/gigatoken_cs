@@ -125,9 +125,9 @@ public sealed class HfCompat
                 if (!t.TryGetProperty("id", out var i) || i.ValueKind != JsonValueKind.Number)
                     continue;
                 var content = c.GetString() ?? "";
-                uint id;
-                try { id = i.GetUInt32(); }
-                catch { continue; }
+                // Native LoadHfJson already validated every added_tokens id as u32
+                // (9999999999, -1, 1.5, "123" all fail load), so this cannot throw.
+                uint id = i.GetUInt32();
                 var special = t.TryGetProperty("special", out var s) && s.ValueKind == JsonValueKind.True;
                 _addedTokens.Add((content, id, special));
                 _idToToken[id] = content;

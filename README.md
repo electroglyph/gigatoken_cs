@@ -153,8 +153,11 @@ dotnet run -c Release --project benches/Gigatoken.Benchmarks -- <tokenizer> [cor
 dotnet test Gigatoken.slnx -c Release
 ```
 
-132 tests, all self-contained except two external-data sweeps that skip when
-data is absent (same policy as upstream):
+323 C# tests (`dotnet test Gigatoken.slnx -c Release`, 99.1% line coverage
+per `coverlet.runsettings`) plus 8 Rust integration tests for the
+`sp_model` converter (`cargo test -p gigatoken-cabi --test sp_model`),
+all self-contained except external-data sweeps that skip when
+data is absent (same policy as upstream; hub success paths skip offline):
 
 - `Phase7ParityTests` — OWT/DCLM hostile sweep; fetch data with
   `tools/fetch_dclm_sample.py`, export vectors with

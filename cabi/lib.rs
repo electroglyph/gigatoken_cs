@@ -41,7 +41,7 @@ pub use crate::bpe::Tokenizer;
 pub use crate::bpe::sentencepiece::EncodeState;
 pub use crate::batch::{WorkerPool, encode_docs_ragged, sp_encode_docs_ragged};
 
-mod sp_model;
+pub mod sp_model;
 
 use crate::bpe::sentencepiece::SentencePieceBPE;
 use crate::input::file_source::{DocFormat, FileSourceSpec, detect_default_format, load_file};

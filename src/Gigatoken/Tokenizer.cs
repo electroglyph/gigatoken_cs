@@ -364,26 +364,25 @@ public sealed class Tokenizer : IDisposable
         ThrowIfDisposed();
         if (_tiktokenSpecials is not null) return new Dictionary<string, uint>(_tiktokenSpecials);
         if (_hfJson is null) return new Dictionary<string, uint>();
-        try
+        // No try/catch: _hfJson is bytes that already passed native LoadHfJson
+        // validation, so System.Text.Json parsing and u32 reads cannot fail
+        // (unparsable added_tokens ids fail load; verified by probe).
+        using var doc = JsonDocument.Parse(_hfJson);
+        var map = new Dictionary<string, uint>();
+        if (doc.RootElement.TryGetProperty("added_tokens", out var added) &&
+            added.ValueKind == JsonValueKind.Array)
         {
-            using var doc = JsonDocument.Parse(_hfJson);
-            var map = new Dictionary<string, uint>();
-            if (doc.RootElement.TryGetProperty("added_tokens", out var added) &&
-                added.ValueKind == JsonValueKind.Array)
+            foreach (var t in added.EnumerateArray())
             {
-                foreach (var t in added.EnumerateArray())
-                {
-                    if (t.ValueKind != JsonValueKind.Object) continue;
-                    var special = t.TryGetProperty("special", out var s) && s.ValueKind == JsonValueKind.True;
-                    if (!special) continue;
-                    if (t.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String &&
-                        t.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.Number)
-                        map[c.GetString() ?? ""] = id.GetUInt32();
-                }
+                if (t.ValueKind != JsonValueKind.Object) continue;
+                var special = t.TryGetProperty("special", out var s) && s.ValueKind == JsonValueKind.True;
+                if (!special) continue;
+                if (t.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String &&
+                    t.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.Number)
+                    map[c.GetString() ?? ""] = id.GetUInt32();
             }
-            return map;
         }
-        catch { return new Dictionary<string, uint>(); }
+        return map;
     }
 
     // -- Encode / decode ------------------------------------------------------

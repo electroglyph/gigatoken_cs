@@ -6,7 +6,13 @@ edition = "2024"
 [lib]
 name = "gigatoken_cabi"
 path = "cabi/lib.rs"
-crate-type = ["cdylib"]
+# cdylib for .NET P/Invoke; rlib so `cargo test --test …` integration tests
+# can link the crate.
+crate-type = ["cdylib", "rlib"]
+
+[[test]]
+name = "sp_model"
+path = "cabi/tests/sp_model.rs"
 
 [dependencies]
 # Vendored upstream core (see cabi/lib.rs #[path] modules) minus pyo3/numpy.
