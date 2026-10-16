@@ -198,12 +198,16 @@ public sealed class CoverageCorePadRowsTests
     }
 
     [Fact]
-    public void RowExceedsWithoutTruncateThrows()
+    public void MaxLengthAloneIsInert()
     {
+        // MaxLength without Truncate/PadToMaxLength is inert (native
+        // pad_truncate_matrix uses cap=MAX, width=longest). The managed
+        // BytesSource fallback used to throw here; it must return the full row.
         using var tok = Fixtures.LoadGpt2();
         using var src = OneBuffer("Hello, world!");
-        Assert.Throws<ArgumentException>(() =>
-            tok.EncodeBatchPadded(src, new PadTruncateOptions(PadId: 0, MaxLength: 1)));
+        var (matrix, lengths) = tok.EncodeBatchPadded(src, new PadTruncateOptions(PadId: 0, MaxLength: 1));
+        Assert.True(lengths[0] > 1);
+        Assert.Equal(lengths[0], matrix.GetLength(1));
     }
 
     [Fact]

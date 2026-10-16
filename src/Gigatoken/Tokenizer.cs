@@ -95,7 +95,7 @@ public sealed class Tokenizer : IDisposable
     // -- Construction ------------------------------------------------------
 
     private static readonly IReadOnlyDictionary<string, (string Pretokenizer, IReadOnlyDictionary<string, uint> Specials)> Encodings =
-        new Dictionary<string, (string, IReadOnlyDictionary<string, uint>)>(StringComparer.OrdinalIgnoreCase)
+        new Dictionary<string, (string, IReadOnlyDictionary<string, uint>)>(StringComparer.Ordinal)
         {
             ["r50k_base"] = ("gpt2", new Dictionary<string, uint> { ["<|endoftext|>"] = 50256 }),
             ["cl100k_base"] = ("gpt4", new Dictionary<string, uint>
@@ -171,15 +171,13 @@ public sealed class Tokenizer : IDisposable
     /// </summary>
     public static Tokenizer FromPretrained(string repoOrPathOrDir)
     {
+        ArgumentNullException.ThrowIfNull(repoOrPathOrDir);
         // Config dispatch first (Kimi/Moonlight TikToken lines).
         var dispatched = TryLoadFromConfig(repoOrPathOrDir);
         if (dispatched is not null) return dispatched;
 
-        if (Hub.LooksLikeRepoId(repoOrPathOrDir))
-        {
-            var file = Hub.GetFile(repoOrPathOrDir);
-            return LoadFileRoute(file);
-        }
+        // Local paths first: a local directory/file whose name also looks like
+        // a hub repo id must resolve locally, never via the network.
         if (Directory.Exists(repoOrPathOrDir))
         {
             var json = Path.Combine(repoOrPathOrDir, "tokenizer.json");
@@ -192,6 +190,11 @@ public sealed class Tokenizer : IDisposable
         }
         if (File.Exists(repoOrPathOrDir))
             return LoadFileRoute(repoOrPathOrDir);
+        if (Hub.LooksLikeRepoId(repoOrPathOrDir))
+        {
+            var file = Hub.GetFile(repoOrPathOrDir);
+            return LoadFileRoute(file);
+        }
         throw new FileNotFoundException($"No such file, directory, or repo id: {repoOrPathOrDir}");
     }
 
@@ -415,7 +418,11 @@ public sealed class Tokenizer : IDisposable
     public uint[][] EncodeBatch(IEnumerable<string> texts, bool? parallel = null)
     {
         ArgumentNullException.ThrowIfNull(texts);
-        return BackendOps.EncodeBatch(Native, texts.Select(NativeBridge.Utf8Bytes).ToArray(), parallel);
+        var list = texts as IList<string> ?? texts.ToList();
+        var docs = new byte[list.Count][];
+        for (var i = 0; i < list.Count; i++)
+            docs[i] = NativeBridge.Utf8Bytes(list[i] ?? throw new ArgumentNullException($"{nameof(texts)}[{i}]"));
+        return BackendOps.EncodeBatch(Native, docs, parallel);
     }
 
     /// <summary>Encodes a batch of raw UTF-8 documents.</summary>
@@ -444,7 +451,11 @@ public sealed class Tokenizer : IDisposable
     public (uint[,] Matrix, long[] Lengths) EncodeBatchPadded(IEnumerable<string> texts, PadTruncateOptions options, bool? parallel = null)
     {
         ArgumentNullException.ThrowIfNull(texts);
-        return BackendOps.EncodeBatchPadded(Native, texts.Select(NativeBridge.Utf8Bytes).ToArray(), parallel, options);
+        var list = texts as IList<string> ?? texts.ToList();
+        var docs = new byte[list.Count][];
+        for (var i = 0; i < list.Count; i++)
+            docs[i] = NativeBridge.Utf8Bytes(list[i] ?? throw new ArgumentNullException($"{nameof(texts)}[{i}]"));
+        return BackendOps.EncodeBatchPadded(Native, docs, parallel, options);
     }
 
     /// <summary>Encodes byte documents with padding/truncation.</summary>
@@ -481,11 +492,18 @@ public sealed class Tokenizer : IDisposable
             var content = row;
             if (o.MaxLength.HasValue)
             {
-                var cap = Math.Max(0, o.MaxLength.Value - prefix.Length - suffix.Length);
-                if (content.Length > cap)
+                var extra = prefix.Length + suffix.Length;
+                if (o.MaxLength.Value < extra)
+                    throw new ArgumentException($"max_length={o.MaxLength.Value} leaves no room for the {extra} special tokens added per sequence");
+                // Native `pad_truncate_matrix` only caps content when
+                // truncate=true (cap=usize::MAX otherwise); MaxLength alone
+                // is inert. When extra>max we throw above instead of clamping
+                // to 0 and overflowing the width.
+                if (o.Truncate)
                 {
-                    if (!o.Truncate) throw new ArgumentException("Row exceeds max_length and truncate=false.");
-                    content = cap == 0 ? [] : (o.TruncateLeft ? content[^cap..] : content[..cap]);
+                    var cap = o.MaxLength.Value - extra;
+                    if (content.Length > cap)
+                        content = cap == 0 ? [] : (o.TruncateLeft ? content[^cap..] : content[..cap]);
                 }
             }
             outs.Add([.. prefix, .. content, .. suffix]);
