@@ -368,8 +368,11 @@ pub struct PadOptsHandle {
 }
 
 /// Owned-bytes pretokenizer iterator (FastR50k scheme, like the Python one).
-/// `pos` is behind a `Mutex` so concurrent `next` calls on one iterator are
-/// serialized instead of `&mut`-aliasing (which would be UB).
+/// `pos` is behind a `Mutex` held across the whole `with_pos → next → store`
+/// step, so concurrent `next` calls on one iterator are serialized
+/// (single logical cursor) instead of `&mut`-aliasing (which would be UB).
+/// Note: any successful `next` (or any other non-forbid guarded call) clears
+/// pending `gt_special_hit_*` state — drain hits before iterating.
 pub struct PretokenIterHandle {
     bytes: Vec<u8>,
     pos: Mutex<usize>,
@@ -985,15 +988,12 @@ pub unsafe extern "C" fn gt_tokenizer_encode_regions(
             Some(unsafe { &*wrap_or_null })
         };
         let h = unsafe { &*handle };
-        let out = match encode_regions_inner(h, &bufs, &format, parallel != 0) {
-            Ok(o) => o,
-            Err(c) => return c,
-        };
-        // Fused forbid scan applies to the raw buffers (mirrors the
-        // BytesSource path, where the scan runs before splitting).
+        // Forbid scan runs BEFORE encode so error-code precedence matches
+        // the batch path and upstream (scan → encode): a forbid hit wins
+        // over invalid UTF-8, and no wasted encode / cache pollution occurs.
         if let Some(w) = wrap {
             if let Some(m) = w.forbid.as_ref() {
-                let docs: Vec<&[u8]> = bufs;
+                let docs: Vec<&[u8]> = bufs.clone();
                 let hits = m.scan_docs(&docs, parallel != 0);
                 if !hits.is_empty() {
                     SPECIAL_HITS.with(|slot| *slot.borrow_mut() = hits.clone());
@@ -1001,6 +1001,10 @@ pub unsafe extern "C" fn gt_tokenizer_encode_regions(
                 }
             }
         }
+        let out = match encode_regions_inner(h, &bufs, &format, parallel != 0) {
+            Ok(o) => o,
+            Err(c) => return c,
+        };
         let (flat, counts) = match apply_wrap(&out.flat, &out.counts, wrap) {
             Ok(t) => t,
             Err((c, m)) => return set_err(c, m),
@@ -1524,15 +1528,22 @@ pub unsafe extern "C" fn gt_vocab_entry(
     out_len: *mut usize,
 ) -> i32 {
     guard(|| {
-        if handle.is_null() || out_id.is_null() {
+        if handle.is_null() || out_id.is_null() || out_bytes.is_null() || out_len.is_null() {
             return set_err(GT_INVALID_ARG, "null handle or out pointer".to_string());
         }
         let h = unsafe { &*handle };
         let cache = vocab_cache(h);
         match cache.as_ref().unwrap().vocab.get(index) {
             Some((id, bytes)) => {
-                unsafe { *out_id = *id };
-                out_vec(bytes.clone(), out_bytes, out_len)
+                // Write `out_id` only after the malloc-backed `out_vec`
+                // succeeds, so a heap failure leaves all three out-params
+                // untouched.
+                let id = *id;
+                let rc = out_vec(bytes.clone(), out_bytes, out_len);
+                if rc == 0 {
+                    unsafe { *out_id = id };
+                }
+                rc
             }
             None => set_err(GT_INVALID_ARG, "vocab index out of range".to_string()),
         }
@@ -2110,9 +2121,19 @@ pub unsafe extern "C" fn gt_train_bpe(
                 let s = unsafe { &*source_or_null };
                 match &s.data {
                     SourceData::Files { paths, format } => {
+                        // An explicit fn-level separator used to be silently
+                        // dropped here. Honor it when the source format carries
+                        // none (a TextFileSource with its own separator keeps
+                        // it, mirroring the Bytes rule above).
+                        let format = match (format, has_sep) {
+                            (DocFormat::Text { separator: None }, 1) => DocFormat::Text {
+                                separator: Some(sep.to_vec()),
+                            },
+                            (f, _) => f.clone(),
+                        };
                         let spec = FileSourceSpec {
                             paths: paths.clone(),
-                            format: format.clone(),
+                            format,
                         };
                         match spec.pretokenize() {
                             Ok(counts) => crate::bpe_train::train_bpe(counts, vocab_size, specials, tie),
@@ -2354,7 +2375,9 @@ pub unsafe extern "C" fn gt_pretokenize_iter_new(
 /// Returns 1 with `out_ptr`/`out_len` set, 0 when exhausted, -1 on error.
 /// Never returns 7: panics are recorded via `gt_last_error_*` but reported
 /// as -1 to stay inside the documented 1/0/-1 protocol. Concurrent `next`
-/// calls are serialized through the position mutex (single logical cursor).
+/// calls hold the position mutex across the whole read→advance step (single
+/// logical cursor). A successful `next` clears pending forbid hits: drain
+/// `gt_special_hit_*` before iterating.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gt_pretokenize_iter_next(
     iter: *mut PretokenIterHandle,
@@ -2370,16 +2393,19 @@ pub unsafe extern "C" fn gt_pretokenize_iter_next(
     }
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let h = unsafe { &*iter };
-        let pos = *h
+        // Hold the position lock across the whole read → advance step so
+        // concurrent `next` calls are serialized (copying `pos`, dropping
+        // the guard, then re-locking to store let two threads deliver the
+        // same piece twice / skip another).
+        let mut guard = h
             .pos
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let mut it = pretokenize::FastR50kPretokenizer::with_pos(&h.bytes, pos);
+        let mut it = pretokenize::FastR50kPretokenizer::with_pos(&h.bytes, *guard);
         match it.next() {
             Some(piece) => {
-                let new_pos = it.pos();
-                // Re-borrow to update: lock again (short critical section).
-                *h.pos.lock().unwrap_or_else(|e| e.into_inner()) = new_pos;
+                *guard = it.pos();
+                drop(guard);
                 // piece borrows h.bytes, which outlives the handle.
                 let (ptr, len) = (piece.0.as_ptr(), piece.0.len());
                 unsafe {
