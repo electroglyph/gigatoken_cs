@@ -534,7 +534,11 @@ public sealed class HfCompat
         long[,]? tensorMask = null;
         if (kind != HfTensorKind.None)
         {
-            var width = rows.Length == 0 ? 0 : rows.Max(r => r.Length);
+            // Empty padded batch keeps the pad width (upstream (0, max));
+            // non-padded empty stays (0, 0).
+            var width = rows.Length == 0
+                ? (padMaxLength && maxLength.HasValue ? maxLength.Value : 0)
+                : rows.Max(r => r.Length);
             if (rows.Any(r => r.Length != width))
                 throw new ArgumentException("Unable to create tensor: the encoded sequences have different lengths; pass padding=True (or encode without return_tensors) instead");
             var uintMat = new uint[rows.Length, width];
@@ -759,11 +763,13 @@ public sealed class HfCompat
         }
         var u2b = Gpt2UnicodeToByte();
         var bytes = new List<byte>(list.Count * 4);
+        // Iterate codepoints, not UTF-16 units: a non-BMP char (surrogate pair)
+        // must be encoded as one unit, not two replacements.
         foreach (var tok in list)
-            foreach (var ch in tok)
+            foreach (var rune in tok.EnumerateRunes())
             {
-                if (u2b.TryGetValue(ch, out var b)) bytes.Add(b);
-                else bytes.AddRange(Encoding.UTF8.GetBytes([ch]));
+                if (rune.Value <= char.MaxValue && u2b.TryGetValue((char)rune.Value, out var b)) bytes.Add(b);
+                else bytes.AddRange(Encoding.UTF8.GetBytes(rune.ToString()));
             }
         return Encoding.UTF8.GetString(bytes.ToArray());
     }
