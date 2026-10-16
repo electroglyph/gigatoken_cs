@@ -95,7 +95,10 @@ internal static unsafe class NativeBridge
         for (var i = 0; i < n; i++)
         {
             nuint v = 0;
-            NativeMethods.gt_special_hit_get((nuint)i, &v);
+            // Unreachable via public API (i is always < count), but never
+            // silently accept an out-of-range hit.
+            if (NativeMethods.gt_special_hit_get((nuint)i, &v) != 0)
+                throw new GigatokenException($"Native forbid-hit {i} is out of range.");
             hits[i] = checked((int)v);
         }
         return hits;
@@ -145,12 +148,27 @@ internal static unsafe class NativeBridge
     {
         try
         {
-            var n = checked((int)len);
-            var out_ = new long[n];
-            new ReadOnlySpan<long>(ptr, n).CopyTo(out_);
-            return out_;
+            return CopyI64(ptr, len);
         }
         finally { NativeMethods.gt_free((nint)ptr); }
+    }
+
+    // Copies without freeing; pair with a joint finally that frees every
+    // native buffer even when an earlier copy throws.
+    private static uint[] CopyU32(uint* ptr, nuint len)
+    {
+        var n = checked((int)len);
+        var out_ = new uint[n];
+        new ReadOnlySpan<uint>(ptr, n).CopyTo(out_);
+        return out_;
+    }
+
+    private static long[] CopyI64(long* ptr, nuint len)
+    {
+        var n = checked((int)len);
+        var out_ = new long[n];
+        new ReadOnlySpan<long>(ptr, n).CopyTo(out_);
+        return out_;
     }
 
     private static nuint[] TakeUSize(nuint* ptr, nuint len)
@@ -163,6 +181,34 @@ internal static unsafe class NativeBridge
             return out_;
         }
         finally { NativeMethods.gt_free((nint)ptr); }
+    }
+
+    // Frees untouched train outputs using raw bounds so the cleanup itself
+    // cannot throw (no checked conversions, no managed allocations).
+    // Only call before any per-entry gt_free has run on these buffers.
+    private static unsafe void FreeTrainOutputs(
+        byte** vptrs, nuint* vlens, nuint vocabN,
+        byte** mleft, nuint* mleftLens, byte** mright, nuint* mrightLens, nuint mergeN)
+    {
+        for (ulong i = 0; i < vocabN; i++)
+            NativeMethods.gt_free((nint)vptrs[i]);
+        NativeMethods.gt_free((nint)vptrs);
+        NativeMethods.gt_free((nint)vlens);
+        FreeTrainMerges(mleft, mleftLens, mright, mrightLens, mergeN);
+    }
+
+    private static unsafe void FreeTrainMerges(
+        byte** mleft, nuint* mleftLens, byte** mright, nuint* mrightLens, nuint mergeN)
+    {
+        for (ulong i = 0; i < mergeN; i++)
+        {
+            NativeMethods.gt_free((nint)mleft[i]);
+            NativeMethods.gt_free((nint)mright[i]);
+        }
+        NativeMethods.gt_free((nint)mleft);
+        NativeMethods.gt_free((nint)mleftLens);
+        NativeMethods.gt_free((nint)mright);
+        NativeMethods.gt_free((nint)mrightLens);
     }
 
     private static TokenizerHandle WrapTokenizer(nint raw) => TokenizerHandle.FromRaw(raw);
@@ -271,12 +317,32 @@ internal static unsafe class NativeBridge
     {
         using var bufs = new PinnedBuffers(inputs);
         uint* flat = null; nuint flatLen = 0; long* counts = null; nuint nrows = 0;
-        nint wrapRaw = wrap is null ? 0 : wrap.DangerousGetHandle();
-        Check(NativeMethods.gt_tokenizer_encode_batch(
-            h, bufs.Ptrs, bufs.Lens, bufs.Count, parallel ? 1 : 0, wrapRaw,
-            &flat, &flatLen, &counts, &nrows));
-        GC.KeepAlive(wrap);
-        return Unflatten(TakeU32(flat, flatLen), TakeI64(counts, nrows));
+        // AddRef (not just KeepAlive): a concurrent Dispose during the call
+        // must block instead of freeing the handle out from under native.
+        var wrapRef = false;
+        try
+        {
+            nint wrapRaw = 0;
+            if (wrap is not null) { wrap.DangerousAddRef(ref wrapRef); wrapRaw = wrap.DangerousGetHandle(); }
+            Check(NativeMethods.gt_tokenizer_encode_batch(
+                h, bufs.Ptrs, bufs.Lens, bufs.Count, parallel ? 1 : 0, wrapRaw,
+                &flat, &flatLen, &counts, &nrows));
+        }
+        finally { if (wrapRef) wrap!.DangerousRelease(); }
+        uint[] flatArr; long[] countsArr;
+        try
+        {
+            flatArr = CopyU32(flat, flatLen);
+            countsArr = CopyI64(counts, nrows);
+        }
+        finally
+        {
+            // Joint cleanup: if the first copy throws (overflow/OOM) the second
+            // buffer is still freed.
+            NativeMethods.gt_free((nint)flat);
+            NativeMethods.gt_free((nint)counts);
+        }
+        return Unflatten(flatArr, countsArr);
     }
 
     internal static uint[][] EncodeRegions(
@@ -284,24 +350,40 @@ internal static unsafe class NativeBridge
     {
         using var bufs = new PinnedBuffers(buffers);
         uint* flat = null; nuint flatLen = 0; long* counts = null; nuint nrows = 0;
-        nint wrapRaw = wrap is null ? 0 : wrap.DangerousGetHandle();
-        int rc;
-        if (sep is null)
+        var wrapRef = false;
+        try
         {
-            rc = NativeMethods.gt_tokenizer_encode_regions(
-                h, bufs.Ptrs, bufs.Lens, bufs.Count, null, 0, 0, parallel ? 1 : 0, wrapRaw,
-                &flat, &flatLen, &counts, &nrows);
-        }
-        else
-        {
-            fixed (byte* sp = sep)
+            nint wrapRaw = 0;
+            if (wrap is not null) { wrap.DangerousAddRef(ref wrapRef); wrapRaw = wrap.DangerousGetHandle(); }
+            int rc;
+            if (sep is null)
+            {
                 rc = NativeMethods.gt_tokenizer_encode_regions(
-                    h, bufs.Ptrs, bufs.Lens, bufs.Count, sp, (nuint)sep.Length, 1, parallel ? 1 : 0, wrapRaw,
+                    h, bufs.Ptrs, bufs.Lens, bufs.Count, null, 0, 0, parallel ? 1 : 0, wrapRaw,
                     &flat, &flatLen, &counts, &nrows);
+            }
+            else
+            {
+                fixed (byte* sp = sep)
+                    rc = NativeMethods.gt_tokenizer_encode_regions(
+                        h, bufs.Ptrs, bufs.Lens, bufs.Count, sp, (nuint)sep.Length, 1, parallel ? 1 : 0, wrapRaw,
+                        &flat, &flatLen, &counts, &nrows);
+            }
+            Check(rc);
         }
-        GC.KeepAlive(wrap);
-        Check(rc);
-        return Unflatten(TakeU32(flat, flatLen), TakeI64(counts, nrows));
+        finally { if (wrapRef) wrap!.DangerousRelease(); }
+        uint[] flatArr; long[] countsArr;
+        try
+        {
+            flatArr = CopyU32(flat, flatLen);
+            countsArr = CopyI64(counts, nrows);
+        }
+        finally
+        {
+            NativeMethods.gt_free((nint)flat);
+            NativeMethods.gt_free((nint)counts);
+        }
+        return Unflatten(flatArr, countsArr);
     }
 
     internal static (uint[,] Matrix, long[] Lengths) EncodeBatchPadded(
@@ -313,10 +395,14 @@ internal static unsafe class NativeBridge
             h, bufs.Ptrs, bufs.Lens, bufs.Count, parallel ? 1 : 0, pad,
             &mat, &nrows, &ncols, &lens));
         uint[,] matrix;
+        long[] lengths;
         try
         {
             var rows = checked((int)nrows); var cols = checked((int)ncols);
             var total = checked(rows * cols);
+            // Copy the small lens buffer first; both native buffers are freed
+            // jointly below even if the matrix allocation throws.
+            lengths = CopyI64(lens, nrows);
             matrix = new uint[rows, cols];
             // Invariant (debug-checked): native returns null only with a zero-size
             // matrix. In release this check compiles away; a violation would
@@ -327,15 +413,30 @@ internal static unsafe class NativeBridge
                 for (var c = 0; c < cols; c++)
                     matrix[r, c] = span[r * cols + c];
         }
-        finally { NativeMethods.gt_free((nint)mat); }
-        return (matrix, TakeI64(lens, nrows));
+        finally
+        {
+            NativeMethods.gt_free((nint)mat);
+            NativeMethods.gt_free((nint)lens);
+        }
+        return (matrix, lengths);
     }
 
     internal static uint[][] EncodeFiles(TokenizerHandle h, SourceHandle source, bool parallel)
     {
         uint* flat = null; nuint flatLen = 0; long* counts = null; nuint nrows = 0;
         Check(NativeMethods.gt_tokenizer_encode_files(h, source, parallel ? 1 : 0, &flat, &flatLen, &counts, &nrows));
-        return Unflatten(TakeU32(flat, flatLen), TakeI64(counts, nrows));
+        uint[] flatArr; long[] countsArr;
+        try
+        {
+            flatArr = CopyU32(flat, flatLen);
+            countsArr = CopyI64(counts, nrows);
+        }
+        finally
+        {
+            NativeMethods.gt_free((nint)flat);
+            NativeMethods.gt_free((nint)counts);
+        }
+        return Unflatten(flatArr, countsArr);
     }
 
     internal static byte[] Decode(TokenizerHandle h, uint[] ids)
@@ -461,14 +562,19 @@ internal static unsafe class NativeBridge
         uint[] prefix, uint[] suffix, nuint? maxTokens, bool truncateLeft, MatcherHandle? matcher)
     {
         nint h;
-        nint matcherRaw = matcher is null ? 0 : matcher.DangerousGetHandle();
-        fixed (uint* pp = prefix)
-        fixed (uint* sp = suffix)
-            Check(NativeMethods.gt_wrap_opts_new(
-                pp, (nuint)prefix.Length, sp, (nuint)suffix.Length,
-                maxTokens.HasValue ? 1 : 0, maxTokens ?? 0, truncateLeft ? 1 : 0, matcherRaw,
-                out h));
-        GC.KeepAlive(matcher);
+        var matcherRef = false;
+        try
+        {
+            nint matcherRaw = 0;
+            if (matcher is not null) { matcher.DangerousAddRef(ref matcherRef); matcherRaw = matcher.DangerousGetHandle(); }
+            fixed (uint* pp = prefix)
+            fixed (uint* sp = suffix)
+                Check(NativeMethods.gt_wrap_opts_new(
+                    pp, (nuint)prefix.Length, sp, (nuint)suffix.Length,
+                    maxTokens.HasValue ? 1 : 0, maxTokens ?? 0, truncateLeft ? 1 : 0, matcherRaw,
+                    out h));
+        }
+        finally { if (matcherRef) matcher!.DangerousRelease(); }
         return WrapWrapOpts(h);
     }
 
@@ -506,48 +612,68 @@ internal static unsafe class NativeBridge
         using var sp = new PinnedBuffers(specials);
         uint* vids = null; byte** vptrs = null; nuint* vlens = null; nuint vocabN = 0;
         byte** mleft = null; nuint* mleftLens = null; byte** mright = null; nuint* mrightLens = null; nuint mergeN = 0;
-        nint srcRaw = source is null ? 0 : source.DangerousGetHandle();
+        var srcRef = false;
         int rc;
-        if (sep is null)
+        try
         {
-            if (input is null)
-            {
-                rc = NativeMethods.gt_train_bpe(inputTag, null, 0, srcRaw, vocabSizeNative,
-                    sp.Ptrs, sp.Lens, sp.Count, tieBreaking, null, 0, 0,
-                    &vids, &vptrs, &vlens, &vocabN, &mleft, &mleftLens, &mright, &mrightLens, &mergeN);
-            }
-            else
-            {
-                fixed (byte* ip = input)
-                    rc = NativeMethods.gt_train_bpe(inputTag, ip, (nuint)input.Length, srcRaw, vocabSizeNative,
-                        sp.Ptrs, sp.Lens, sp.Count, tieBreaking, null, 0, 0,
-                        &vids, &vptrs, &vlens, &vocabN, &mleft, &mleftLens, &mright, &mrightLens, &mergeN);
-            }
-        }
-        else
-        {
-            fixed (byte* sxp = sep)
+            nint srcRaw = 0;
+            if (source is not null) { source.DangerousAddRef(ref srcRef); srcRaw = source.DangerousGetHandle(); }
+            if (sep is null)
             {
                 if (input is null)
                 {
                     rc = NativeMethods.gt_train_bpe(inputTag, null, 0, srcRaw, vocabSizeNative,
-                        sp.Ptrs, sp.Lens, sp.Count, tieBreaking, sxp, (nuint)sep.Length, 1,
+                        sp.Ptrs, sp.Lens, sp.Count, tieBreaking, null, 0, 0,
                         &vids, &vptrs, &vlens, &vocabN, &mleft, &mleftLens, &mright, &mrightLens, &mergeN);
                 }
                 else
                 {
                     fixed (byte* ip = input)
                         rc = NativeMethods.gt_train_bpe(inputTag, ip, (nuint)input.Length, srcRaw, vocabSizeNative,
-                            sp.Ptrs, sp.Lens, sp.Count, tieBreaking, sxp, (nuint)sep.Length, 1,
+                            sp.Ptrs, sp.Lens, sp.Count, tieBreaking, null, 0, 0,
                             &vids, &vptrs, &vlens, &vocabN, &mleft, &mleftLens, &mright, &mrightLens, &mergeN);
                 }
             }
+            else
+            {
+                fixed (byte* sxp = sep)
+                {
+                    if (input is null)
+                    {
+                        rc = NativeMethods.gt_train_bpe(inputTag, null, 0, srcRaw, vocabSizeNative,
+                            sp.Ptrs, sp.Lens, sp.Count, tieBreaking, sxp, (nuint)sep.Length, 1,
+                            &vids, &vptrs, &vlens, &vocabN, &mleft, &mleftLens, &mright, &mrightLens, &mergeN);
+                    }
+                    else
+                    {
+                        fixed (byte* ip = input)
+                            rc = NativeMethods.gt_train_bpe(inputTag, ip, (nuint)input.Length, srcRaw, vocabSizeNative,
+                                sp.Ptrs, sp.Lens, sp.Count, tieBreaking, sxp, (nuint)sep.Length, 1,
+                                &vids, &vptrs, &vlens, &vocabN, &mleft, &mleftLens, &mright, &mrightLens, &mergeN);
+                    }
+                }
+            }
         }
-        GC.KeepAlive(source);
+        finally { if (srcRef) source!.DangerousRelease(); }
         Check(rc);
-        var ids = TakeU32(vids, vocabN);
-        var nVocab = checked((int)vocabN);
-        var vocab = new Dictionary<uint, byte[]>(nVocab);
+        // Pre-phase OOM windows: TakeU32 frees vids on both paths, but the
+        // other six buffers (plus all inner strings) would leak if the id copy,
+        // a checked conversion, or the dictionary allocation throws first.
+        uint[] ids;
+        int nVocab, nMerge;
+        Dictionary<uint, byte[]> vocab;
+        try
+        {
+            ids = TakeU32(vids, vocabN);
+            nVocab = checked((int)vocabN);
+            nMerge = checked((int)mergeN);
+            vocab = new Dictionary<uint, byte[]>(nVocab);
+        }
+        catch
+        {
+            FreeTrainOutputs(vptrs, vlens, vocabN, mleft, mleftLens, mright, mrightLens, mergeN);
+            throw;
+        }
         var ptrSpan = new ReadOnlySpan<nint>(vptrs, nVocab);
         var lenSpan = new ReadOnlySpan<nuint>(vlens, nVocab);
         var vocabDone = 0;
@@ -567,8 +693,10 @@ internal static unsafe class NativeBridge
             // Mid-loop managed OOM: free the failing entry plus all remaining
             // native vocab buffers. Entries before vocabDone were already freed
             // in-loop, so [vocabDone, nVocab) is exactly the owned remainder.
+            // Merge outputs are untouched at this stage: free them fully.
             for (var j = vocabDone; j < nVocab; j++)
                 NativeMethods.gt_free(ptrSpan[j]);
+            FreeTrainMerges(mleft, mleftLens, mright, mrightLens, mergeN);
             throw;
         }
         finally
@@ -576,8 +704,7 @@ internal static unsafe class NativeBridge
             NativeMethods.gt_free((nint)vptrs);
             NativeMethods.gt_free((nint)vlens);
         }
-        var nMerge = checked((int)mergeN);
-        var merges = new List<(byte[], byte[])>(nMerge);
+        List<(byte[], byte[])> merges;
         var ll = new ReadOnlySpan<nint>(mleft, nMerge);
         var lls = new ReadOnlySpan<nuint>(mleftLens, nMerge);
         var rl = new ReadOnlySpan<nint>(mright, nMerge);
@@ -585,6 +712,7 @@ internal static unsafe class NativeBridge
         var mergeDone = 0;
         try
         {
+            merges = new List<(byte[], byte[])>(nMerge);
             for (; mergeDone < nMerge; mergeDone++)
             {
                 var llen = checked((int)lls[mergeDone]);
@@ -663,13 +791,16 @@ internal static unsafe class NativeBridge
         }
         Check(rc);
         var nn = checked((int)n);
-        var list = new List<(byte[], long)>(nn);
         var k = new ReadOnlySpan<nint>(keys, nn);
         var kl = new ReadOnlySpan<nuint>(keysLens, nn);
         var c = new ReadOnlySpan<nuint>(counts, nn);
         var done = 0;
+        List<(byte[], long)> list;
         try
         {
+            // Allocated inside the guarded region: an OOM here still runs the
+            // catch/finally below, so no native buffer leaks.
+            list = new List<(byte[], long)>(nn);
             for (; done < nn; done++)
             {
                 var klen = checked((int)kl[done]);
