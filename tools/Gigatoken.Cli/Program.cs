@@ -53,7 +53,14 @@ static int Bench(string[] args)
     }
     catch (Exception ex)
     {
-        Console.Error.WriteLine($"error: {ex.Message}");
+        // Print the full inner-exception chain: failures behind the static
+        // NativeLib initializer (e.g. the DllNotFoundException carrying the
+        // GIGATOKEN_NATIVE echo) would otherwise be hidden behind the outer
+        // TypeInitializationException's generic message.
+        var messages = new List<string>();
+        for (var cur = ex; cur is not null; cur = cur.InnerException)
+            messages.Add(cur.Message);
+        Console.Error.WriteLine($"error: {string.Join(" <-- ", messages)}");
         return 1;
     }
 }

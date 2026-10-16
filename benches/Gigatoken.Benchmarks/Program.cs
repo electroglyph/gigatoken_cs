@@ -64,5 +64,8 @@ public class EncodeBenchmarks
 
     [Benchmark]
     public (uint[,] Matrix, long[] Lengths) BatchPadded() =>
-        _tok.EncodeBatchPadded(_docs, new PadTruncateOptions(PadId: 0, PadToMaxLength: true, MaxLength: 512), parallel: true);
+        // Truncate must accompany PadToMaxLength: without it the native side
+        // rejects any row longer than MaxLength, and the synthetic docs always
+        // exceed 512 ids.
+        _tok.EncodeBatchPadded(_docs, new PadTruncateOptions(PadId: 0, PadToMaxLength: true, MaxLength: 512, Truncate: true), parallel: true);
 }

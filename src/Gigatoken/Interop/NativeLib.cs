@@ -6,15 +6,20 @@ namespace Gigatoken.Interop;
 /// <summary>Locates and loads the native <c>gigatoken_cabi</c> library.</summary>
 internal static class NativeLib
 {
+    public const string EnvOverrideName = "GIGATOKEN_NATIVE";
     private static int _loaded;
     private static nint _handle;
+    private static readonly object _loadLock = new();
 
     internal static void EnsureLoaded()
     {
+        // Lock-serialized lazy init: losers block until the winner publishes
+        // _handle BEFORE the flag, so no caller ever observes loaded=1 with a
+        // zero handle. Failures leave the flag clear for retry.
         if (Volatile.Read(ref _loaded) != 0) return;
-        if (Interlocked.CompareExchange(ref _loaded, 1, 0) != 0) return;
-        try
+        lock (_loadLock)
         {
+            if (_loaded != 0) return;
             // Eager single resolution: the DllImportResolver fires lazily per
             // P/Invoke method, so without pinning, a mid-process environment or
             // filesystem change could split bindings across two live library
@@ -25,32 +30,32 @@ internal static class NativeLib
             var handle = LoadLibrary();
             NativeLibrary.SetDllImportResolver(
                 typeof(NativeLib).Assembly, Resolve);
-            _handle = handle;
-        }
-        catch
-        {
-            Interlocked.Exchange(ref _loaded, 0);
-            throw;
+            Volatile.Write(ref _handle, handle);
+            Volatile.Write(ref _loaded, 1);
         }
     }
 
     private static nint Resolve(string libraryName, System.Reflection.Assembly assembly, DllImportSearchPath? searchPath) =>
         libraryName != NativeMethods.LibraryName ? nint.Zero : _handle;
     private static nint LoadLibrary() =>
-        LoadLibrary(AppContext.BaseDirectory, Environment.GetEnvironmentVariable("GIGATOKEN_NATIVE"));
+        LoadLibrary(AppContext.BaseDirectory, Environment.GetEnvironmentVariable(EnvOverrideName));
 
     // (baseDir, env) parameters exist for testability: the suite drives every
     // arm in-process with temp dirs without touching process-global loader
     // state (the pinned _handle is only assigned in EnsureLoaded).
     internal static nint LoadLibrary(string baseDir, string? env)
     {
-        // 1. Explicit override for development / custom layouts.
-        string? badEnv = null;
+        // 1. Explicit override for development / custom layouts. An explicit
+        // path that fails to load is a hard error, never a silent fallback to a
+        // different library.
         if (env is not null)
         {
             if (NativeLibrary.TryLoad(env, out var envHandle))
                 return envHandle;
-            badEnv = env;
+            throw new DllNotFoundException(
+                $"Unable to load native library from {EnvOverrideName}='{env}'. " +
+                "The explicit override path failed; no fallback probing was attempted. " +
+                "Build it with build.sh or fix the path.");
         }
 
         var rid = RuntimeInformation.RuntimeIdentifier;
@@ -81,13 +86,10 @@ internal static class NativeLib
         if (NativeLibrary.TryLoad(MapName(), typeof(NativeLib).Assembly, null, out var sys))
             return sys;
 
-        string budgetMsg;
-        if (badEnv is null) budgetMsg = "GIGATOKEN_NATIVE is unset. ";
-        else budgetMsg = $"GIGATOKEN_NATIVE='{badEnv}' failed to load. ";
         throw new DllNotFoundException(
-            $"Unable to load native library '{MapName()}'. " + budgetMsg +
+            $"Unable to load native library '{MapName()}'. {EnvOverrideName} is unset. " +
             $"Searched runtimes/{rid}/native next to {baseDir}, cargo target/ dirs, and system paths. " +
-            "Build it with build.sh or set GIGATOKEN_NATIVE to the library path.");
+            $"Build it with build.sh or set {EnvOverrideName} to the library path.");
     }
 
     // Excluded: Windows/macOS library names are untestable on Linux CI.

@@ -103,14 +103,15 @@ public sealed class CoverageNativeLibTests : IDisposable
     [Fact]
     public void EnvOverrideBadFailsWithEcho()
     {
-        // GIGATOKEN_NATIVE pointing at garbage: badEnv echo in the throw arm.
+        // GIGATOKEN_NATIVE pointing at garbage: fail-fast, no silent fallback.
         var staged = StagedCliDir();
         var bad = Path.Combine(_dir, "nope.so");
         var (exit, _, err) = RunDotnet(staged,
             ["bench", Fixtures.Gpt2Json, WriteDoc()], _dir,
             new() { ["GIGATOKEN_NATIVE"] = bad });
         Assert.Equal(1, exit);
-        Assert.Contains($"GIGATOKEN_NATIVE='{bad}' failed to load", err);
+        Assert.Contains($"GIGATOKEN_NATIVE='{bad}'", err);
+        Assert.Contains("no fallback probing was attempted", err);
     }
 
     [Fact]
@@ -193,12 +194,13 @@ public sealed class CoverageLoadLibraryTests : IDisposable
     }
 
     [Fact]
-    public void EnvMissFallsThroughToWorkspace()
+    public void EnvMissFailsFast()
     {
-        // Bad env path does not abort: the cargo walk still finds the lib.
-        var h = Gigatoken.Interop.NativeLib.LoadLibrary(AppContext.BaseDirectory, "/nonexistent/x.so");
-        Assert.NotEqual(nint.Zero, h);
-        NativeLibrary.Free(h);
+        // Bad env path is a hard error: no fallback to the cargo walk.
+        var ex = Assert.Throws<DllNotFoundException>(() =>
+            Gigatoken.Interop.NativeLib.LoadLibrary(AppContext.BaseDirectory, "/nonexistent/x.so"));
+        Assert.Contains("GIGATOKEN_NATIVE='/nonexistent/x.so'", ex.Message);
+        Assert.Contains("no fallback probing was attempted", ex.Message);
     }
 
     [Fact]
@@ -261,6 +263,7 @@ public sealed class CoverageLoadLibraryTests : IDisposable
         const string bad = "/nonexistent/y.so";
         var ex = Assert.Throws<DllNotFoundException>(() =>
             Gigatoken.Interop.NativeLib.LoadLibrary(EmptyDir("covmiss_"), bad));
-        Assert.Contains($"GIGATOKEN_NATIVE='{bad}' failed to load", ex.Message);
+        Assert.Contains($"GIGATOKEN_NATIVE='{bad}'", ex.Message);
+        Assert.Contains("no fallback probing was attempted", ex.Message);
     }
 }

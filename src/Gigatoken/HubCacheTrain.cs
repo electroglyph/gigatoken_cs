@@ -12,6 +12,9 @@ public static class Hub
         string repoId, string filename = "tokenizer.json",
         RepoType repoType = RepoType.Model, string revision = "main")
     {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(filename);
+        ArgumentNullException.ThrowIfNull(revision);
         try
         {
             var bytes = NativeBridge.HubFile(
@@ -26,8 +29,11 @@ public static class Hub
     }
 
     /// <summary>Whether <paramref name="name"/> looks like a hub repo id.</summary>
-    public static bool LooksLikeRepoId(string name) =>
-        NativeBridge.LooksLikeRepoId(NativeBridge.Utf8Bytes(name));
+    public static bool LooksLikeRepoId(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return NativeBridge.LooksLikeRepoId(NativeBridge.Utf8Bytes(name));
+    }
 
     /// <summary>Configured HF token, or null.</summary>
     public static string? GetToken()
@@ -44,12 +50,26 @@ public static class EncodeCache
     public const long DefaultBytes = 512L << 20;
 
     /// <summary>Sets the per-worker cache budget in bytes (null = unbounded).</summary>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxBytes"/> is negative.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxBytes"/> is negative or
+    /// does not fit the native word size (32-bit truncation guard).</exception>
     public static void SetMaxBytes(long? maxBytes)
     {
         if (maxBytes.HasValue && maxBytes.Value < 0)
             throw new ArgumentOutOfRangeException(nameof(maxBytes));
-        NativeBridge.SetMaxCacheBytes(maxBytes.HasValue ? (nuint)maxBytes.Value : null);
+        nuint? native = null;
+        if (maxBytes.HasValue)
+        {
+            // Unchecked, values above uint.MaxValue silently truncate on 32-bit;
+            // convert checked and report overflow as out-of-range.
+            try { native = checked((nuint)maxBytes.Value); }
+            catch (OverflowException)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(maxBytes), maxBytes.Value,
+                    "Budget does not fit the native word size on this platform.");
+            }
+        }
+        NativeBridge.SetMaxCacheBytes(native);
     }
 
     /// <summary>Current per-worker cache budget in bytes (null = unbounded).</summary>
@@ -107,6 +127,9 @@ public static class BpeTrainer
     }
 
     /// <summary>Trains on a file source.</summary>
+    /// <remarks>An explicit <paramref name="separator"/> applies to plain-text
+    /// sources that carry no separator of their own (a <c>TextFileSource</c>
+    /// with its own separator keeps it); JSONL/Parquet sources ignore it.</remarks>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="vocabSize"/> is negative.</exception>
     public static (System.Collections.Frozen.FrozenDictionary<uint, byte[]> Vocab, IReadOnlyList<(byte[] Left, byte[] Right)> Merges) Train(
