@@ -58,6 +58,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
       # Nightly, per rust-toolchain.toml (edition-2024 nightly features).
       - uses: dtolnay/rust-toolchain@nightly
         with:
@@ -92,6 +94,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@nightly
       - uses: actions/setup-dotnet@v5
         with:
