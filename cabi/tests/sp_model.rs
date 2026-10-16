@@ -314,3 +314,107 @@ fn precompiled_charsmap_normalizer() {
     assert_eq!(norms[0]["type"], "Precompiled");
     assert_eq!(norms[0]["precompiled_charsmap"], "AQIDBA==");
 }
+
+// --- Regression tests: duplicate-merge dedup and strict field handling ---
+
+#[test]
+fn duplicate_piece_emits_merge_once() {
+    // a duplicated piece entry must not emit the same ("a", "b") merge
+    // twice; the first (highest-rank) occurrence wins.
+    let dup = piece("ab", 2.0, 1);
+    let m = valid_model(&[], &[dup]);
+    let json = sentencepiece_to_tokenizer_json(&m).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let merges = v["model"]["merges"].as_array().unwrap();
+    let count = merges
+        .iter()
+        .filter(|x| x[0] == "a" && x[1] == "b")
+        .count();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn piece_score_wrong_wire_type_errors() {
+    // PIECE_SCORE encoded as varint instead of fixed32 must error
+    // (Python `assert isinstance(..., float)`), not silently default.
+    let mut inner = len_field(PIECE_PIECE, b"ab");
+    inner.extend(varint_field(PIECE_SCORE, 2));
+    inner.extend(varint_field(PIECE_TYPE, 1));
+    let mut m = len_field(MODEL_PIECES, &inner);
+    m.extend(trainer(&[(TRAINER_MODEL_TYPE, 2), (TRAINER_BYTE_FALLBACK, 1)]));
+    assert!(
+        sentencepiece_to_tokenizer_json(&m)
+            .unwrap_err()
+            .contains("bad piece score")
+    );
+}
+
+#[test]
+fn piece_type_wrong_wire_type_errors() {
+    // PIECE_TYPE encoded as length-delimited instead of varint must error.
+    let mut inner = len_field(PIECE_PIECE, b"ab");
+    let mut key = tag(PIECE_SCORE, 5);
+    key.extend_from_slice(&2.0f32.to_le_bytes());
+    inner.extend(key);
+    inner.extend(len_field(PIECE_TYPE, b"x"));
+    let mut m = len_field(MODEL_PIECES, &inner);
+    m.extend(trainer(&[(TRAINER_MODEL_TYPE, 2), (TRAINER_BYTE_FALLBACK, 1)]));
+    assert!(
+        sentencepiece_to_tokenizer_json(&m)
+            .unwrap_err()
+            .contains("bad piece type")
+    );
+}
+
+#[test]
+fn piece_content_wrong_wire_type_errors() {
+    // PIECE_PIECE encoded as varint instead of bytes must error.
+    let mut inner = varint_field(PIECE_PIECE, 7);
+    let mut key = tag(PIECE_SCORE, 5);
+    key.extend_from_slice(&2.0f32.to_le_bytes());
+    inner.extend(key);
+    inner.extend(varint_field(PIECE_TYPE, 1));
+    let mut m = len_field(MODEL_PIECES, &inner);
+    m.extend(trainer(&[(TRAINER_MODEL_TYPE, 2), (TRAINER_BYTE_FALLBACK, 1)]));
+    assert!(
+        sentencepiece_to_tokenizer_json(&m)
+            .unwrap_err()
+            .contains("bad piece content")
+    );
+}
+
+#[test]
+fn missing_piece_fields_use_python_defaults() {
+    // absent inner fields fall back to Python-compatible defaults
+    // (content=b"", score=0.0, type=1) instead of erroring.
+    let inner = len_field(PIECE_PIECE, b"ab");
+    let mut m = len_field(MODEL_PIECES, &inner);
+    m.extend(trainer(&[(TRAINER_MODEL_TYPE, 2), (TRAINER_BYTE_FALLBACK, 1)]));
+    let json = sentencepiece_to_tokenizer_json(&m).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v["model"]["vocab"]["ab"], 0);
+}
+
+#[test]
+fn unk_piece_wrong_wire_type_errors() {
+    // TRAINER_UNK_PIECE encoded as varint instead of bytes must error.
+    let m = valid_model(&[(TRAINER_UNK_PIECE, 1)], &[]);
+    assert!(
+        sentencepiece_to_tokenizer_json(&m)
+            .unwrap_err()
+            .contains("bad unk piece")
+    );
+}
+
+#[test]
+fn charsmap_wrong_wire_type_errors() {
+    // NORM_PRECOMPILED_CHARSMAP encoded as varint instead of bytes must error.
+    let mut m = valid_model(&[], &[]);
+    let norm = varint_field(NORM_PRECOMPILED_CHARSMAP, 1);
+    m.extend(len_field(MODEL_NORMALIZER_SPEC, &norm));
+    assert!(
+        sentencepiece_to_tokenizer_json(&m)
+            .unwrap_err()
+            .contains("bad charsmap")
+    );
+}

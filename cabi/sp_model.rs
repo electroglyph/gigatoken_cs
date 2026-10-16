@@ -125,13 +125,6 @@ fn varint_or(model: &HashMap<u32, FieldValue>, field: u32, default: u64) -> u64 
     }
 }
 
-fn bytes_or<'a>(model: &'a HashMap<u32, FieldValue>, field: u32, default: &'a [u8]) -> &'a [u8] {
-    match model.get(&field) {
-        Some(FieldValue::Bytes(b)) => b,
-        _ => default,
-    }
-}
-
 pub fn sentencepiece_to_tokenizer_json(data: &[u8]) -> Result<String, String> {
     let mut pieces: Vec<(String, f32, i64)> = Vec::new();
     let mut trainer: HashMap<u32, FieldValue> = HashMap::new();
@@ -144,14 +137,26 @@ pub fn sentencepiece_to_tokenizer_json(data: &[u8]) -> Result<String, String> {
                     _ => return Err("not a sentencepiece model: bad piece field".to_string()),
                 };
                 let piece = scalars(&bytes)?;
-                let content = bytes_or(&piece, PIECE_PIECE, b"").to_vec();
-                let raw_score = bytes_or(&piece, PIECE_SCORE, &[0, 0, 0, 0]).to_vec();
+                // Strict on malformed inner fields: missing →
+                // Python-compatible default, present-but-wrong-wire-type →
+                // error (Python `assert isinstance`).
+                let content = match piece.get(&PIECE_PIECE) {
+                    None => b"".to_vec(),
+                    Some(FieldValue::Bytes(b)) => b.clone(),
+                    Some(_) => return Err("not a sentencepiece model: bad piece content".to_string()),
+                };
+                let raw_score = match piece.get(&PIECE_SCORE) {
+                    None => vec![0, 0, 0, 0],
+                    Some(FieldValue::Bytes(b)) => b.clone(),
+                    Some(_) => return Err("not a sentencepiece model: bad piece score".to_string()),
+                };
                 if raw_score.len() != 4 {
                     return Err("not a sentencepiece model: bad piece score".to_string());
                 }
                 let piece_type = match piece.get(&PIECE_TYPE) {
+                    None => 1,
                     Some(FieldValue::Varint(v)) => *v as i64,
-                    _ => 1,
+                    Some(_) => return Err("not a sentencepiece model: bad piece type".to_string()),
                 };
                 let score = f32::from_le_bytes([raw_score[0], raw_score[1], raw_score[2], raw_score[3]]);
                 let content = String::from_utf8(content)
@@ -212,12 +217,20 @@ pub fn sentencepiece_to_tokenizer_json(data: &[u8]) -> Result<String, String> {
     for (i, (piece, _, _)) in pieces.iter().enumerate() {
         vocab.insert(piece.as_str(), i);
     }
-    let unk_piece = bytes_or(&trainer, TRAINER_UNK_PIECE, b"<unk>");
+    let unk_piece = match trainer.get(&TRAINER_UNK_PIECE) {
+        None => b"<unk>".as_slice(),
+        Some(FieldValue::Bytes(b)) => b.as_slice(),
+        Some(_) => return Err("not a sentencepiece model: bad unk piece".to_string()),
+    };
     let unk_piece = std::str::from_utf8(unk_piece)
         .map_err(|_| "not a sentencepiece model: unk piece is not UTF-8".to_string())?;
 
     let mut normalizers = Vec::new();
-    let charsmap = bytes_or(&normspec, NORM_PRECOMPILED_CHARSMAP, b"");
+    let charsmap = match normspec.get(&NORM_PRECOMPILED_CHARSMAP) {
+        None => b"".as_slice(),
+        Some(FieldValue::Bytes(b)) => b.as_slice(),
+        Some(_) => return Err("not a sentencepiece model: bad charsmap".to_string()),
+    };
     if !charsmap.is_empty() {
         normalizers.push(serde_json::json!({
             "type": "Precompiled",
@@ -318,8 +331,13 @@ fn generate_merges(pieces: &[(String, f32, i64)], vocab: &HashMap<&str, usize>) 
         let kb = (b.2, b.0.chars().count(), b.1.chars().count());
         kb.partial_cmp(&ka).unwrap_or(std::cmp::Ordering::Equal)
     });
+    // Deduplicate identical (left, right) pairs, keeping the first (highest
+    // rank) occurrence: duplicate piece entries in the model proto would
+    // otherwise emit the same merge twice.
+    let mut seen = std::collections::HashSet::new();
     merges
         .into_iter()
         .map(|(l, r, _)| (l, r))
+        .filter(|m| seen.insert(m.clone()))
         .collect()
 }
