@@ -20,7 +20,10 @@ public abstract class FileSourceBase : IFileSource
     {
         ArgumentNullException.ThrowIfNull(create);
         ArgumentNullException.ThrowIfNull(paths);
-        var bufs = paths.Select(p => NativeBridge.Utf8Bytes(Path.GetFullPath(p))).ToArray();
+        var list = paths as IList<string> ?? paths.ToList();
+        var bufs = new byte[list.Count][];
+        for (var i = 0; i < list.Count; i++)
+            bufs[i] = NativeBridge.Utf8Bytes(Path.GetFullPath(list[i] ?? throw new ArgumentNullException($"{nameof(paths)}[{i}]")));
         _native = create(bufs);
     }
 

@@ -4,9 +4,11 @@ namespace Gigatoken;
 
 /// <summary>Tiktoken compatibility wrapper (mirrors <c>TiktokenCompat</c>).</summary>
 /// <remarks>
-/// The forbid-matcher cache owns its <see cref="SubstringMatcher"/> instances
-/// and disposes them on eviction; callers must not dispose a matcher obtained
-/// from this cache. All cache access is lock-guarded for pool-parallel encode.
+/// The forbid-matcher cache never disposes entries on eviction: a matcher
+/// borrowed by a concurrent encode may still be in use outside the cache lock,
+/// so reclamation is left to SafeHandle finalization. Callers must not dispose
+/// a matcher obtained from this cache. All cache access is lock-guarded for
+/// pool-parallel encode.
 /// </remarks>
 public sealed class TiktokenCompat
 {
@@ -76,8 +78,10 @@ public sealed class TiktokenCompat
         string allowedSpecial, ICollection<string>? allowedSet, HashSet<string> specialsSet)
     {
         ArgumentNullException.ThrowIfNull(allowedSpecial);
-        if (allowedSpecial == "all") return [.. specialsSet];
+        // An explicit set always wins (mirrors the single upstream arg being a
+        // collection); the string is only consulted when no set is given.
         if (allowedSet is not null) return [.. allowedSet];
+        if (allowedSpecial == "all") return [.. specialsSet];
         if (allowedSpecial == "none") return [];
         return [allowedSpecial];
     }
@@ -87,8 +91,9 @@ public sealed class TiktokenCompat
         HashSet<string> specialsSet, HashSet<string> allowed)
     {
         ArgumentNullException.ThrowIfNull(disallowedSpecial);
-        if (disallowedSpecial == "all") return new HashSet<string>(specialsSet.Except(allowed));
+        // An explicit set always wins; "all" no longer discards it.
         if (disallowedSet is not null) return [.. disallowedSet];
+        if (disallowedSpecial == "all") return new HashSet<string>(specialsSet.Except(allowed));
         if (disallowedSpecial == "none") return [];
         return [disallowedSpecial];
     }
@@ -103,15 +108,16 @@ public sealed class TiktokenCompat
             .Where(s => disallowed.Contains(s) || !allowed.Contains(s))
             .OrderBy(s => s, StringComparer.Ordinal).ToArray();
         if (scan.Length == 0) return (null, [], disallowed);
-        var key = string.Join("\0", scan);
+        // Length-prefixed framing: unambiguous unlike bare "\0" joins, so two
+        // distinct scans (even with NUL-bearing specials) never share a key.
+        var key = scan.Length + "\0" + string.Concat(scan.Select(s => s.Length + "\0" + s));
         lock (_cacheLock)
         {
             if (_matcherCache.Count > 32)
             {
-                foreach (var evicted in _matcherCache.Values)
-                {
-                    try { evicted.Forbid?.Dispose(); } catch { }
-                }
+                // Never dispose here: a matcher borrowed by a concurrent encode
+                // may still be in use outside the lock. Evicted entries are left
+                // for SafeHandle finalization once all borrowers drop them.
                 _matcherCache.Clear();
             }
             if (!_matcherCache.TryGetValue(key, out var opts))
@@ -139,6 +145,11 @@ public sealed class TiktokenCompat
         }
         catch (SpecialTokenFoundException ex)
         {
+            // A stale matcher could report an index outside this scan; map it to
+            // a GigatokenException instead of leaking IndexOutOfRange.
+            if (ex.MatchedIndices.Any(i => i < 0 || i >= patterns.Length))
+                throw new GigatokenException(
+                    "Native forbid-matcher returned an out-of-range special index.");
             var present = new HashSet<string>(ex.MatchedIndices.Select(i => patterns[i]));
             var bad = present.Intersect(disallowed).OrderBy(s => s, StringComparer.Ordinal).ToArray();
             if (bad.Length > 0)
@@ -208,7 +219,11 @@ public sealed class TiktokenCompat
         string disallowedSpecial = "all", ICollection<string>? disallowedSpecialSet = null)
     {
         ArgumentNullException.ThrowIfNull(texts);
-        return EncodeList(texts.Select(s => Encoding.UTF8.GetBytes(s ?? throw new ArgumentNullException(nameof(texts)))).ToArray(),
+        var list = texts as IList<string> ?? texts.ToList();
+        var docs = new byte[list.Count][];
+        for (var i = 0; i < list.Count; i++)
+            docs[i] = Encoding.UTF8.GetBytes(list[i] ?? throw new ArgumentNullException($"{nameof(texts)}[{i}]"));
+        return EncodeList(docs,
             allowedSpecial, allowedSpecialSet, disallowedSpecial, disallowedSpecialSet,
             numThreads == 1 ? false : null);
     }
@@ -280,17 +295,17 @@ public sealed class TiktokenCompat
         return batch.Select(t => DecodeBytes((t ?? throw new ArgumentNullException(nameof(batch))).ToArray())).ToList();
     }
 
-    /// <summary>Decodes a single token to bytes.</summary>
+    /// <summary>Decodes a single token to bytes (returns a copy; mutating it cannot poison the cache).</summary>
     public byte[] DecodeSingleTokenBytes(uint token) =>
-        BytesById().TryGetValue(token, out var bytes) ? bytes
+        BytesById().TryGetValue(token, out var bytes) ? (byte[])bytes.Clone()
         : throw new KeyNotFoundException($"Unknown token id {token}.");
 
-    /// <summary>Decodes tokens to per-token bytes.</summary>
+    /// <summary>Decodes tokens to per-token bytes (each array is a copy).</summary>
     public List<byte[]> DecodeTokensBytes(IEnumerable<uint> tokens)
     {
         ArgumentNullException.ThrowIfNull(tokens);
         var byId = BytesById();
-        return tokens.Select(t => byId.TryGetValue(t, out var b) ? b
+        return tokens.Select(t => byId.TryGetValue(t, out var b) ? (byte[])b.Clone()
             : throw new KeyNotFoundException($"Unknown token id {t}.")).ToList();
     }
 
@@ -298,18 +313,18 @@ public sealed class TiktokenCompat
     public (string Text, int[] Offsets) DecodeWithOffsets(uint[] tokens) =>
         throw new NotSupportedException("decode_with_offsets is not supported.");
 
-    /// <summary>Mergeable token byte values.</summary>
+    /// <summary>Mergeable token byte values (each array is a copy).</summary>
     public List<byte[]> TokenByteValues()
     {
         lock (_cacheLock)
         {
-            if (_byteValuesCache is not null) return _byteValuesCache.ToList();
+            if (_byteValuesCache is not null) return _byteValuesCache.Select(b => (byte[])b.Clone()).ToList();
             var byId = BytesById();
             var list = byId
                 .Where(kv => !_specialIds.Contains(kv.Key))
                 .OrderBy(kv => kv.Key).Select(kv => kv.Value).ToArray();
             _byteValuesCache = list;
-            return list.ToList();
+            return list.Select(b => (byte[])b.Clone()).ToList();
         }
     }
 }

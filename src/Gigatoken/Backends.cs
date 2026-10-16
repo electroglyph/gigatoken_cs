@@ -82,9 +82,13 @@ public sealed class BpeTokenizer : IDisposable
     /// <summary>Loads a <c>.tiktoken</c> rank file.</summary>
     public static BpeTokenizer FromTiktoken(string path, string pretokenizer, IReadOnlyDictionary<string, uint>? specialTokens = null)
     {
-        var keys = (specialTokens ?? new Dictionary<string, uint>())
-            .Select(kv => NativeBridge.Utf8Bytes(kv.Key)).ToArray();
-        var vals = (specialTokens ?? new Dictionary<string, uint>()).Values.ToArray();
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(pretokenizer);
+        var entries = (specialTokens ?? new Dictionary<string, uint>()).ToList();
+        var keys = new byte[entries.Count][];
+        for (var i = 0; i < entries.Count; i++)
+            keys[i] = NativeBridge.Utf8Bytes(entries[i].Key ?? throw new ArgumentNullException($"{nameof(specialTokens)}[{i}]"));
+        var vals = entries.Select(kv => kv.Value).ToArray();
         return new BpeTokenizer(NativeBridge.BpeFromTiktoken(
             NativeBridge.Utf8Bytes(Path.GetFullPath(path)),
             NativeBridge.Utf8Bytes(pretokenizer), keys, vals));
@@ -114,7 +118,11 @@ public sealed class BpeTokenizer : IDisposable
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(texts);
-        return BackendOps.EncodeBatch(Native, texts.Select(NativeBridge.Utf8Bytes).ToArray(), parallel);
+        var list = texts as IList<string> ?? texts.ToList();
+        var docs = new byte[list.Count][];
+        for (var i = 0; i < list.Count; i++)
+            docs[i] = NativeBridge.Utf8Bytes(list[i] ?? throw new ArgumentNullException($"{nameof(texts)}[{i}]"));
+        return BackendOps.EncodeBatch(Native, docs, parallel);
     }
 
     /// <summary>Encodes a batch of raw UTF-8 documents.</summary>
@@ -306,7 +314,11 @@ public sealed class SentencePieceTokenizer : IDisposable
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(texts);
-        return BackendOps.EncodeBatch(Native, texts.Select(NativeBridge.Utf8Bytes).ToArray(), parallel);
+        var list = texts as IList<string> ?? texts.ToList();
+        var docs = new byte[list.Count][];
+        for (var i = 0; i < list.Count; i++)
+            docs[i] = NativeBridge.Utf8Bytes(list[i] ?? throw new ArgumentNullException($"{nameof(texts)}[{i}]"));
+        return BackendOps.EncodeBatch(Native, docs, parallel);
     }
 
     /// <summary>Encodes a batch of raw UTF-8 documents.</summary>
