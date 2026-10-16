@@ -1,8 +1,9 @@
 # .NET port CI: Rust C ABI + library + tests on five runners.
+# Runs on pull requests only; pushes to master go through publish.yml,
+# which runs the same Release test gate before packing and pushing.
 name: ci
 
 on:
-  push:
   pull_request:
 
 jobs:
@@ -13,10 +14,10 @@ jobs:
         os: [ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up .NET 10
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
 

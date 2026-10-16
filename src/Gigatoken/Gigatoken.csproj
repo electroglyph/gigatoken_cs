@@ -10,11 +10,15 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);1591</NoWarn>
     <EnableLibraryImportGenerator>true</EnableLibraryImportGenerator>
-    <PackageId>Gigatoken</PackageId>
-    <Version>0.11.0</Version>
+    <PackageId>gigatoken_cs</PackageId>
+    <VersionPrefix>0.11.0</VersionPrefix>
     <Authors>Gigatoken contributors</Authors>
     <Description>High-throughput BPE / SentencePiece tokenizer (.NET 10 port of gigatoken).</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/electroglyph/gigatoken_cs</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>gigatoken;tokenizer;bpe;sentencepiece;tiktoken</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <!-- Reproducible + debuggable packages: embedded symbols (no .snupkg), SourceLink. -->
     <Deterministic>true</Deterministic>
     <DebugType>embedded</DebugType>
@@ -25,6 +29,7 @@
 
   <!-- Native payloads land here via build.sh (cargo build, release, per target triple). -->
   <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
     <Content Include="runtimes/**/native/*" Pack="true" PackagePath="runtimes/%(RecursiveDir)%(Filename)%(Extension)" Visible="false" />
   </ItemGroup>
 

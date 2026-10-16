@@ -21,6 +21,9 @@ TestCoverageReport/
 target/
 **/*.rs.bk
 
+# Staged native payloads (built by build.sh / CI, packed into the nupkg)
+src/Gigatoken/runtimes/
+
 # Python tooling (tools/*.py)
 __pycache__/
 *.py[cod]
@@ -37,10 +40,14 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Docs: only the README is tracked (audit.md / port.md are local working notes)
+# Docs: only the README and CHANGELOG are tracked (audit.md / port.md are local working notes)
 *.md
 !README.md
+!CHANGELOG.md
 
 # Local overrides / secrets
 .env
 appsettings.Development.json
+
+# Internal repro harnesses (not part of the build)
+audit-repro/

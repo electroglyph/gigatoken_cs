@@ -1,0 +1,127 @@
+name: publish
+
+# Version-triggered release via NuGet trusted publishing: a VersionPrefix
+# bump merged to master is the whole ceremony (and the release approval
+# review). Bump-less pushes run green and push nothing new
+# (--skip-duplicate). No tags, no CI prereleases, no .snupkg.
+#
+# One-time nuget.org setup (outside this repo): an account-level trusted
+# publisher policy scoped to gigatoken_cs (new-package scope to claim the
+# gigatoken_cs ID first, new-version scope after), bound to this account
+# + repo + workflow. The username below is public (it is on every package
+# page); untrusted forks cannot mint tokens because the OIDC subject will
+# not match the bound policy.
+#
+# The package ships prebuilt native engines: build-native compiles the
+# gigatoken-cabi cdylib once per RID (native runners everywhere except
+# win-arm64, which cross-compiles with the VS ARM64 tools) and the publish
+# job embeds them as NuGet runtimes/ assets, so consumers need no Rust
+# toolchain. NativeLib probes exactly that layout.
+on:
+  push:
+    branches: [master]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            rid: linux-x64
+            lib: libgigatoken_cabi.so
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            rid: linux-arm64
+            lib: libgigatoken_cabi.so
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            rid: osx-arm64
+            lib: libgigatoken_cabi.dylib
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            rid: osx-x64
+            lib: libgigatoken_cabi.dylib
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rid: win-x64
+            lib: gigatoken_cabi.dll
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            rid: win-arm64
+            lib: gigatoken_cabi.dll
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      # Nightly, per rust-toolchain.toml (edition-2024 nightly features).
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: ARM64 cross tools (Windows)
+        if: matrix.rid == 'win-arm64'
+        shell: pwsh
+        # No third-party action: ilammy/msvc-dev-cmd is stuck on Node 20.
+        # Puts the VS ARM64 cross linker first so aarch64-msvc finds it.
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          $msvc = (Get-ChildItem "$vs\VC\Tools\MSVC" | Sort-Object Name -Descending | Select-Object -First 1).FullName
+          Add-Content $env:GITHUB_PATH "$msvc\bin\HostX64\ARM64"
+      - name: Build cdylib
+        run: cargo build -p gigatoken-cabi --release --target ${{ matrix.target }}
+      - name: Stage RID asset
+        shell: bash
+        run: |
+          mkdir -p dist/${{ matrix.rid }}/native
+          cp "target/${{ matrix.target }}/release/${{ matrix.lib }}" "dist/${{ matrix.rid }}/native/"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: native-${{ matrix.rid }}
+          path: dist/${{ matrix.rid }}/native/${{ matrix.lib }}
+          if-no-files-found: error
+
+  publish:
+    needs: build-native
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - name: Build host native lib
+        # The test gate needs a loadable cdylib; NativeLib falls back to
+        # the cargo target/ dirs when no runtimes/ payload is staged yet.
+        run: ./build.sh
+      - name: Release test gate
+        run: dotnet test ./Gigatoken.slnx -c Release --nologo
+      - name: Download native RID assets
+        uses: actions/download-artifact@v5
+        with:
+          pattern: native-*
+          path: /tmp/native-assets
+      - name: Stage runtimes for pack
+        run: |
+          for d in /tmp/native-assets/native-*/; do
+            rid="${d%/}"
+            rid="${rid##*native-}"
+            mkdir -p "src/Gigatoken/runtimes/$rid/native"
+            cp "$d"* "src/Gigatoken/runtimes/$rid/native/"
+          done
+          find src/Gigatoken/runtimes -type f | sort
+      - name: Pack the library
+        run: dotnet pack ./src/Gigatoken/Gigatoken.csproj -c Release --no-build -o ./nupkg
+      - name: NuGet login (temporary API key)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: electroglyph
+      - name: Push to nuget.org
+        run: dotnet nuget push ./nupkg/*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate
