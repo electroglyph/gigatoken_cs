@@ -51,10 +51,20 @@ public sealed class HubTests
         _ = Hub.GetToken();
     }
 
+    // huggingface.co answers 404 (→ HubFileNotFoundException) or 401
+    // (→ UnauthorizedAccessException) for nonexistent repos depending on
+    // edge/auth behavior; either is the clean typed failure.
+    private static void AssertHubMissing(Action action)
+    {
+        var ex = Record.Exception(action);
+        Assert.True(ex is HubFileNotFoundException || ex is UnauthorizedAccessException,
+            $"Expected a typed hub-missing error, got {ex?.GetType().FullName}: {ex?.Message}");
+    }
+
     [Fact]
     public void MissingHubFileThrows()
     {
-        Assert.Throws<HubFileNotFoundException>(() =>
+        AssertHubMissing(() =>
             Hub.GetFile("definitely-not-a-real-repo-xyz-123", "tokenizer.json"));
     }
 }

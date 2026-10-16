@@ -13,7 +13,11 @@ and a `gigatoken bench` CLI.
 - ~18x faster than the HF `tokenizers` C# binding on short sequences
   (see [Benchmarks](#benchmarks)).
 
-## Cloning
+## Prerequisites
+
+- .NET 10 SDK.
+- Rust nightly toolchain (`cargo`; see `rust-toolchain.toml`) — only for
+  source builds; not needed with the NuGet package.
 
 ```sh
 git clone --recurse-submodules https://github.com/electroglyph/gigatoken_cs.git
@@ -28,26 +32,16 @@ checked in as the `upstream/` git submodule (pinned to commit `fac0114`).
 The Rust core is compiled from those exact sources via `#[path]` includes
 in `cabi/lib.rs` — no fork, no copied files.
 
-## Building
-
-Prerequisites: .NET 10 SDK, a Rust nightly toolchain (`cargo`; see
-`rust-toolchain.toml`).
+## Install via NuGet (recommended)
 
 ```sh
-./build.sh            # host RID: cargo build --release + stage runtimes/ + dotnet build
-TARGETS="x86_64-unknown-linux-gnu aarch64-apple-darwin" ./build.sh  # cross
-./build.sh --pack     # ... then dotnet pack (produces Gigatoken.0.10.0.nupkg)
-./build.sh --no-native  # skip cargo; uses a staged lib or GIGATOKEN_NATIVE
+dotnet add package gigatoken_cs
 ```
 
-If you build the Rust side yourself, point the binding at it without
-`build.sh`:
-
-```sh
-GIGATOKEN_NATIVE=/path/to/libgigatoken_cabi.so dotnet run --project MyApp
-```
-
-## Using
+The package targets `net10.0` and ships prebuilt native engines for all six
+RIDs (`linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`, `win-x64`,
+`win-arm64`) as `runtimes/` assets, so no Rust toolchain or manual staging is
+needed:
 
 ```csharp
 using Gigatoken;
@@ -56,6 +50,26 @@ using var tok = Tokenizer.FromPretrained("gpt2"); // repo-id, dir, or tokenizer.
 uint[] ids = tok.Encode("Hello, world!");          // [15496, 11, 995, 0]
 string text = tok.DecodeToString(ids);             // "Hello, world!"
 ```
+
+## Building from source
+
+```sh
+./build.sh            # host RID: cargo build --release + stage runtimes/ + dotnet build
+TARGETS="x86_64-unknown-linux-gnu aarch64-apple-darwin" ./build.sh  # cross
+./build.sh --pack     # ... then dotnet pack (produces gigatoken_cs.0.11.0.nupkg)
+./build.sh --no-native  # skip cargo; uses a staged lib or GIGATOKEN_NATIVE
+```
+
+The staged `runtimes/` payloads are git-ignored build artifacts. Tests need
+a loadable native lib: run `./build.sh` first, or point at one directly —
+if you build the Rust side yourself, point the binding at it without
+`build.sh`:
+
+```sh
+GIGATOKEN_NATIVE=/path/to/libgigatoken_cabi.so dotnet run --project MyApp
+```
+
+## Using
 
 More runnable snippets live in [`examples/`](examples) — each one is compiled
 into the test assembly and executed by `ExamplesTests`, so they cannot rot:

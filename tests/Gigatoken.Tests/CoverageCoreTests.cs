@@ -389,10 +389,20 @@ public sealed class CoverageCoreLoadRouteTests
         Assert.Equal($"No such file, directory, or repo id: {missing}", ex.Message);
     }
 
+    // huggingface.co answers 404 (→ HubFileNotFoundException) or 401
+    // (→ UnauthorizedAccessException) for nonexistent repos depending on
+    // edge/auth behavior; either is the clean typed failure.
+    private static void AssertHubMissing(Action action)
+    {
+        var ex = Record.Exception(action);
+        Assert.True(ex is HubFileNotFoundException || ex is UnauthorizedAccessException,
+            $"Expected a typed hub-missing error, got {ex?.GetType().FullName}: {ex?.Message}");
+    }
+
     [Fact]
     public void FromPretrainedBogusRepoThrowsHubFileNotFound()
     {
-        Assert.Throws<HubFileNotFoundException>(() =>
+        AssertHubMissing(() =>
             Tokenizer.FromPretrained("bogus-org-xyz/bogus-repo-xyz-123"));
     }
 
@@ -431,11 +441,20 @@ public sealed class CoverageCoreHubCacheTests
     [Fact]
     public void HubGetFileErrorMapping()
     {
-        var ex = Assert.Throws<HubFileNotFoundException>(() =>
+        var ex = Record.Exception(() =>
             Hub.GetFile("definitely-not-a-real-repo-xyz-123", "tokenizer.json"));
-        Assert.NotNull(ex.Message);
-        Assert.NotNull(ex.InnerException);
-        Assert.IsAssignableFrom<FileNotFoundException>(ex.InnerException);
+        if (ex is HubFileNotFoundException nf)
+        {
+            Assert.NotNull(nf.Message);
+            Assert.NotNull(nf.InnerException);
+            Assert.IsAssignableFrom<FileNotFoundException>(nf.InnerException);
+        }
+        else
+        {
+            // huggingface.co may answer 401 instead of 404 for nonexistent
+            // repos; that path must also surface as a typed hub error.
+            Assert.IsType<UnauthorizedAccessException>(ex);
+        }
     }
 
     [Fact]
