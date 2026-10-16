@@ -11,7 +11,7 @@
     <NoWarn>$(NoWarn);1591</NoWarn>
     <EnableLibraryImportGenerator>true</EnableLibraryImportGenerator>
     <PackageId>Gigatoken</PackageId>
-    <Version>0.10.0</Version>
+    <Version>0.11.0</Version>
     <Authors>Gigatoken contributors</Authors>
     <Description>High-throughput BPE / SentencePiece tokenizer (.NET 10 port of gigatoken).</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
