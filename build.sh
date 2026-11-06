@@ -77,6 +77,16 @@ if [ "$DO_NATIVE" -eq 1 ]; then
       echo "==> staged $dest/$lib"
     done
   fi
+  # A dev-profile cdylib from an older tree would shadow the fresh release
+  # build: NativeLib's cargo-target fallback probes target/debug before
+  # target/release, so a leftover debug lib silently wins for local
+  # `dotnet test` runs. Drop it (cargo rebuilds it on the next debug build).
+  for stale in target/debug/libgigatoken_cabi.so target/debug/libgigatoken_cabi.dylib target/debug/gigatoken_cabi.dll; do
+    if [ -e "$stale" ]; then
+      echo "==> removing stale dev-profile $stale"
+      rm -f "$stale"
+    fi
+  done
 fi
 
 if [ "$DO_PACK" -eq 1 ]; then

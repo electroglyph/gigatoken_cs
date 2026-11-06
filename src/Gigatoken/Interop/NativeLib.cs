@@ -38,7 +38,17 @@ internal static class NativeLib
     private static nint Resolve(string libraryName, System.Reflection.Assembly assembly, DllImportSearchPath? searchPath) =>
         libraryName != NativeMethods.LibraryName ? nint.Zero : _handle;
     private static nint LoadLibrary() =>
-        LoadLibrary(AppContext.BaseDirectory, Environment.GetEnvironmentVariable(EnvOverrideName));
+        LoadLibrary(DefaultBaseDirectory(), Environment.GetEnvironmentVariable(EnvOverrideName));
+
+    // The native engine travels with this assembly, so probe beside it first.
+    // AppContext.BaseDirectory is the host process's directory, which differs
+    // when the package is loaded into another host (a plugin); it remains the
+    // fallback for single-file bundles, where the assembly has no location.
+    internal static string DefaultBaseDirectory()
+    {
+        string? assemblyDirectory = Path.GetDirectoryName(typeof(NativeLib).Assembly.Location);
+        return string.IsNullOrEmpty(assemblyDirectory) ? AppContext.BaseDirectory : assemblyDirectory;
+    }
 
     // (baseDir, env) parameters exist for testability: the suite drives every
     // arm in-process with temp dirs without touching process-global loader

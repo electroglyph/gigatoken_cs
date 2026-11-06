@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.0] - 2026-11-06
+
+Upstream sync: `upstream/` submodule advances `fac0114` → `cd5ee64`
+(upstream [`gigatoken`](https://github.com/marcelroed/gigatoken) v0.10.0 →
+v0.11.0). The C ABI is unchanged (still 51 `gt_*` functions); no managed
+code changes were needed beyond docs.
+
+### Added
+
+- New `nemotron_right_aligned` pretokenizer scheme (upstream issue #60):
+  the Nemotron-3 pattern with right-aligned `\p{N}` digit groups of three,
+  so `"1234567"` pretokens as `1|234|567`. Pass
+  `pretokenizer: "nemotron_right_aligned"` to `Tokenizer.FromTiktoken` /
+  `BpeTokenizer.FromTiktoken` or `--pretokenizer nemotron_right_aligned`
+  to the `bench` CLI. The error message for an unknown scheme now lists
+  all 10 valid schemes.
+
+## [0.12.1] - 2026-10-24
+
+### Fixed
+
+- Native library lookup probes `runtimes/<rid>/native` beside
+  `Gigatoken.dll` before falling back to `AppContext.BaseDirectory`. The base
+  directory is the host process's directory, so the package's own assembly
+  directory is the correct first probe when it is loaded into another host
+  (a plugin).
+
 ## [0.11.0] - 2026-10-16
 
 Correctness release: no design changes, only bug fixes with regression

@@ -231,6 +231,9 @@ public sealed class Tokenizer : IDisposable
     /// Loads a <c>.tiktoken</c> file. When <paramref name="pretokenizer"/> is null,
     /// the scheme is inferred from the file name (<c>r50k_base</c>/<c>cl100k_base</c>/<c>o200k_base</c>);
     /// unknown names throw (never guessed). Explicit values override filename-derived schemes.
+    /// One of <c>gpt2</c> (<c>r50k</c>), <c>gpt4</c> (<c>cl100k</c>), <c>qwen2</c>,
+    /// <c>qwen35</c>, <c>olmo3</c>, <c>deepseek_v3</c>, <c>o200k</c>, <c>nemotron</c>,
+    /// <c>nemotron_right_aligned</c>, <c>kimi</c>.
     /// </summary>
     public static Tokenizer FromTiktoken(
         string path, string? pretokenizer = null, IReadOnlyDictionary<string, uint>? specialTokens = null)

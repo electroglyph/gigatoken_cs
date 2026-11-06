@@ -36,7 +36,9 @@ static void PrintUsage()
                                  k/m/g/t with optional 'i'/'b', e.g. 100MB; 'none' = all).
           --validate             Fail if any compared doc diverges (requires --compare-to).
           --doc-separator <sep>  Document separator for in-memory/whole-file mode.
-          --pretokenizer <name>  Pretokenizer scheme for .tiktoken inputs (gpt2, gpt4, ...).
+          --pretokenizer <name>  Pretokenizer scheme for .tiktoken inputs (gpt2, gpt4,
+                                 qwen2, qwen35, olmo3, deepseek_v3, o200k, nemotron,
+                                 nemotron_right_aligned, kimi; r50k/cl100k aliases).
         """);
 }
 

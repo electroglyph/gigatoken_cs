@@ -79,7 +79,7 @@ public sealed class BpeTokenizer : IDisposable
         return Native;
     }
 
-    /// <summary>Loads a <c>.tiktoken</c> rank file.</summary>
+    /// <summary>Loads a <c>.tiktoken</c> rank file (schemes listed on <see cref="Tokenizer.FromTiktoken(string, string?, IReadOnlyDictionary{string, uint}?)"/>).</summary>
     public static BpeTokenizer FromTiktoken(string path, string pretokenizer, IReadOnlyDictionary<string, uint>? specialTokens = null)
     {
         ArgumentNullException.ThrowIfNull(path);

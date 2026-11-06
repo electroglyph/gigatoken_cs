@@ -124,6 +124,68 @@ public sealed class CoverageNativeLibTests : IDisposable
         Assert.DoesNotContain("Unable to load native library", err);
     }
 
+    [Fact]
+    public void LoadedNativeMatchesManifestVersions()
+    {
+        // Stale-shadowing pin: the loader's cargo-target fallback probes
+        // target/debug before target/release, so an older dev-profile cdylib
+        // could silently win over the fresh release build (build.sh removes it
+        // after every native build). If the loaded engine ever disagrees with
+        // the manifests again, fail loudly instead of testing old code.
+        var root = FindRepoRoot();
+        var cargo = ReadPackageVersion(Path.Combine(root, "Cargo.toml"));
+        var csproj = ReadVersionPrefix(Path.Combine(root, "src", "Gigatoken", "Gigatoken.csproj"));
+        Assert.Equal(cargo, csproj);
+        var loaded = $"{Gigatoken.Interop.NativeMethods.gt_version_major()}." +
+            $"{Gigatoken.Interop.NativeMethods.gt_version_minor()}." +
+            $"{Gigatoken.Interop.NativeMethods.gt_version_patch()}";
+        Assert.Equal(cargo, loaded);
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (var i = 0; i < 8 && dir is not null; i++, dir = dir.Parent)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "Cargo.toml")) &&
+                File.Exists(Path.Combine(dir.FullName, "src", "Gigatoken", "Gigatoken.csproj")))
+                return dir.FullName;
+        }
+        throw new DirectoryNotFoundException("Repo root not found walking up from test output.");
+    }
+
+    private static string ReadPackageVersion(string cargoToml)
+    {
+        Assert.True(File.Exists(cargoToml), $"Missing {cargoToml}.");
+        var inPackage = false;
+        foreach (var raw in File.ReadLines(cargoToml))
+        {
+            var line = raw.Trim();
+            if (line.StartsWith('[')) inPackage = line == "[package]";
+            else if (inPackage && line.StartsWith("version", StringComparison.Ordinal))
+            {
+                var q1 = line.IndexOf('"');
+                var q2 = line.LastIndexOf('"');
+                if (q1 >= 0 && q2 > q1) return line.Substring(q1 + 1, q2 - q1 - 1);
+            }
+        }
+        throw new InvalidDataException($"No [package] version in {cargoToml}.");
+    }
+
+    private static string ReadVersionPrefix(string csproj)
+    {
+        Assert.True(File.Exists(csproj), $"Missing {csproj}.");
+        const string open = "<VersionPrefix>";
+        const string close = "</VersionPrefix>";
+        foreach (var raw in File.ReadLines(csproj))
+        {
+            var line = raw.Trim();
+            if (line.StartsWith(open, StringComparison.Ordinal) && line.EndsWith(close, StringComparison.Ordinal))
+                return line.Substring(open.Length, line.Length - open.Length - close.Length);
+        }
+        throw new InvalidDataException($"No <VersionPrefix> in {csproj}.");
+    }
+
     // Minimal localhost hub stub: answers every request with one fixed
     // status so the HTTP-status → typed-exception mapping is tested
     // hermetically (real huggingface.co answers 401 or 404 for missing
@@ -349,6 +411,20 @@ public sealed class CoverageLoadLibraryTests : IDisposable
     public void CargoWalkHit()
     {
         var h = Gigatoken.Interop.NativeLib.LoadLibrary(AppContext.BaseDirectory, null);
+        Assert.NotEqual(nint.Zero, h);
+        NativeLibrary.Free(h);
+    }
+
+    [Fact]
+    public void DefaultBaseDirectoryHit()
+    {
+        // Plugin regression pin: the default base is the assembly's own
+        // directory (its runtimes/<rid>/native travels with it), not the
+        // host process's base directory. In-process the two coincide, so
+        // this pins that the picked directory yields a loadable native;
+        // the assembly-first ordering itself is verified live in the host.
+        var h = Gigatoken.Interop.NativeLib.LoadLibrary(
+            Gigatoken.Interop.NativeLib.DefaultBaseDirectory(), null);
         Assert.NotEqual(nint.Zero, h);
         NativeLibrary.Free(h);
     }

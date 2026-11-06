@@ -389,7 +389,7 @@ pub unsafe extern "C" fn gt_version_major() -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gt_version_minor() -> i32 {
-    12
+    13
 }
 
 #[unsafe(no_mangle)]

@@ -1,7 +1,7 @@
 # Gigatoken for .NET
 
 Fast multilingual tokenizers for .NET: a C# binding over the gigatoken Rust
-core (`cabi/`), mirroring the Python `gigatoken` package API (v0.10.0).
+core (`cabi/`), mirroring the Python `gigatoken` package API (v0.11.0).
 BPE and SentencePiece backends, file/bytes sources, BPE training, a
 HuggingFace `tokenizers`-compatible surface, a `tiktoken`-compatible surface,
 and a `gigatoken bench` CLI.
@@ -28,7 +28,7 @@ Already cloned without submodules? `git submodule update --init`.
 
 Upstream Python repo:
 [`marcelroed/gigatoken`](https://github.com/marcelroed/gigatoken),
-checked in as the `upstream/` git submodule (pinned to commit `fac0114`).
+checked in as the `upstream/` git submodule (pinned to commit `cd5ee64`).
 The Rust core is compiled from those exact sources via `#[path]` includes
 in `cabi/lib.rs` — no fork, no copied files.
 
@@ -56,14 +56,17 @@ string text = tok.DecodeToString(ids);             // "Hello, world!"
 ```sh
 ./build.sh            # host RID: cargo build --release + stage runtimes/ + dotnet build
 TARGETS="x86_64-unknown-linux-gnu aarch64-apple-darwin" ./build.sh  # cross
-./build.sh --pack     # ... then dotnet pack (produces gigatoken_cs.0.11.0.nupkg)
+./build.sh --pack     # ... then dotnet pack (produces gigatoken_cs.0.13.0.nupkg)
 ./build.sh --no-native  # skip cargo; uses a staged lib or GIGATOKEN_NATIVE
 ```
 
 The staged `runtimes/` payloads are git-ignored build artifacts. Tests need
 a loadable native lib: run `./build.sh` first, or point at one directly —
 if you build the Rust side yourself, point the binding at it without
-`build.sh`:
+`build.sh`. `build.sh` also deletes any stale dev-profile cdylib
+(`target/debug/…`): the loader's cargo-target fallback probes `debug`
+before `release`, so a leftover debug build from an older tree would
+otherwise shadow the fresh release engine.
 
 ```sh
 GIGATOKEN_NATIVE=/path/to/libgigatoken_cabi.so dotnet run --project MyApp
@@ -71,7 +74,7 @@ GIGATOKEN_NATIVE=/path/to/libgigatoken_cabi.so dotnet run --project MyApp
 
 ## Using
 
-More runnable snippets live in [`examples/`](examples) — each one is compiled
+More runnable snippets live in [`examples/`](https://github.com/electroglyph/gigatoken_cs/tree/master/examples) — each one is compiled
 into the test assembly and executed by `ExamplesTests`, so they cannot rot:
 
 | Example | Upstream analogue |
@@ -118,7 +121,9 @@ dotnet run --project tools/Gigatoken.Cli -- bench <tokenizer> <files...> [option
   --comparison-limit <n> max bytes compared (default 100MB, decimal SI)
   --validate             fail if any compared doc diverges (needs --compare-to)
   --doc-separator <sep>  split files on this separator
-  --pretokenizer <name>  scheme for .tiktoken inputs (gpt2, cl100k, ...)
+  --pretokenizer <name>  scheme for .tiktoken inputs (gpt2, gpt4, qwen2, qwen35,
+                           olmo3, deepseek_v3, o200k, nemotron,
+                           nemotron_right_aligned, kimi; r50k/cl100k aliases)
 ```
 
 Note: upstream compares against HuggingFace `tokenizers`; there is no live HF
